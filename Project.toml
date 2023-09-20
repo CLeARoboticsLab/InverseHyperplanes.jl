@@ -1,0 +1,18 @@
+name = "Assignment5"
+uuid = "9c604635-1385-46f0-8a51-c9e1651f4fd9"
+authors = ["David Fridovich-Keil <dfk@utexas.edu>"]
+version = "0.1.0"
+
+[deps]
+BlockArrays = "8e7c35d0-a365-5155-bbbb-fb81a777f24e"
+GLMakie = "e9467ef8-e4e7-5192-8a1a-b1aee30e663a"
+LazySets = "b4f0291d-fe17-52bc-9479-3d1a343d9043"
+LinearAlgebra = "37e2e46d-f89d-539d-b4ee-838fcccc9c8e"
+Makie = "ee78f7c6-11fb-53f2-987a-cfe4a2b5a57a"
+PATHSolver = "f5f7c340-0bb3-5c69-969a-41884d311d1b"
+ParametricMCPs = "9b992ff8-05bb-4ea1-b9d2-5ef72d82f7ad"
+ProgressMeter = "92933f4c-e287-5a05-a399-4b506db050ca"
+Symbolics = "0c5d862f-8b57-4792-8d23-62f2024744c7"
+Test = "8dfed614-e22c-5e08-85e1-65c5234f0b40"
+TrajectoryGamesBase = "ac1ac542-73eb-4349-ae1b-660ab3609574"
+TrajectoryGamesExamples = "ff3fa34c-8d8f-519c-b5bc-31760c52507a"
