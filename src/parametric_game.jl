@@ -134,7 +134,6 @@ function ParametricGame(;
     )[1]
 
     # Set lower and upper bounds for z.
-    # MAKE SURE THESE BOUNDS ARE 
     z̲ = [
         fill(-Inf, sum(primal_dimensions))
         fill(-Inf, sum(equality_dimensions))
