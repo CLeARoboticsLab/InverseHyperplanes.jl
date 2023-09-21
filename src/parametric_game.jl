@@ -87,24 +87,68 @@ function ParametricGame(;
         shared_inequality_dimension
 
     # Define symbolic variables for this MCP.
-    # TODO!
+    @variables z̃[1:total_dimension]
+    z = BlockArray(
+        Symbolics.scalarize(z̃), 
+        [
+            sum(primal_dimensions),
+            sum(equality_dimensions),
+            sum(inequality_dimensions),
+            shared_equality_dimension,
+            shared_inequality_dimension,
+        ]
+    )
+    x = BlockArray(z[Block(1)], primal_dimensions)
+    λ = BlockArray(z[Block(2)], equality_dimensions)
+    μ = BlockArray(z[Block(3)], inequality_dimensions)
+    λ̃ = z[Block(4)]
+    μ̃ = z[Block(5)]
 
     # Define a symbolic variable for the parameters.
-    # TODO!
+    @variables θ̃[1:parameter_dimension]
+    θ = Symbolics.scalarize(θ̃)
 
     # Build symbolic expressions for objectives and constraints for all players
     # (and shared constraints).
-    # TODO!
+    fs = map(f -> f(x,θ), objectives)
+    gs = map(g -> g(x,θ), equality_constraints)
+    hs = map(h -> h(x,θ), inequality_constraints)
+    g̃ = shared_equality_constraint(x,θ)
+    h̃ = shared_inequality_constraint(x,θ)
 
     # Build Lagrangians for all players.
-    # TODO!
+    Ls = map(zip(1:N, fs, gs, hs)) do (i, f, g, h)
+        f - λ[Block(i)]' * g - μ[Block(i)]' * h - λ̃' * g̃ - μ̃' * h̃ 
+    end
 
     # Build F = [∇ₓLs, gs, hs, g̃, h̃]'.
-    F = # TODO!
+    ∇ₓLs = map(zip(Ls, blocks(x))) do (L, xᵢ)
+        Symbolics.gradient(L, xᵢ)
+    end
+
+    F = Symbolics.build_function(
+        [reduce(vcat, ∇ₓLs); reduce(vcat, gs); reduce(vcat, hs); g̃; h̃],
+        z̃, 
+        θ̃;
+        expression = Val{false}
+    )[1]
 
     # Set lower and upper bounds for z.
-    z̲ = # TODO!
-    z̅ = # TODO!
+    # MAKE SURE THESE BOUNDS ARE 
+    z̲ = [
+        fill(-Inf, sum(primal_dimensions))
+        fill(-Inf, sum(equality_dimensions))
+        fill(0, sum(inequality_dimensions))
+        fill(-Inf, shared_equality_dimension)
+        fill(0, shared_inequality_dimension)
+    ]
+    z̅ = [
+        fill(Inf, sum(primal_dimensions))
+        fill(Inf, sum(equality_dimensions))
+        fill(Inf, sum(inequality_dimensions))
+        fill(Inf, shared_equality_dimension)
+        fill(Inf, shared_inequality_dimension)
+    ]
 
     # Build parametric MCP.
     parametric_mcp = ParametricMCP(F, z̲, z̅, parameter_dimension)

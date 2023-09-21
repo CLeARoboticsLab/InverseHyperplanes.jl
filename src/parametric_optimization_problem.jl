@@ -75,14 +75,27 @@ function ParametricOptimizationProblem(;
     h = inequality_constraint(x, θ)
 
     # Build Lagrangian using f, g, h.
-    L = # TODO!
+    L = f - λ' * g - μ' * h
 
     # Build F = [∇ₓL, g, h]'.
-    F = # TODO!
+    F = Symbolics.build_function(
+        [Symbolics.gradient(L, x); g; h],
+        z̃, 
+        θ̃;
+        expression = Val{false}
+    )[1]
 
     # Set lower and upper bounds for z.
-    z̲ = # TODO!
-    z̅ = # TODO!
+    z̲ = [
+        fill(-Inf, primal_dimension)
+        fill(-Inf, equality_dimension)
+        fill(0, inequality_dimension)
+    ]
+    z̅ = [
+        fill(Inf, primal_dimension)
+        fill(Inf, equality_dimension)
+        fill(Inf, inequality_dimension)
+    ]
 
     # Build parametric MCP.
     parametric_mcp = ParametricMCP(F, z̲, z̅, parameter_dimension)
