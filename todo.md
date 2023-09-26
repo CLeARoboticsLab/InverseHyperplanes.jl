@@ -1,0 +1,12 @@
+- [x] in trajectory game definition, add adjacency matrix as an argument
+- [x] shared constraint defintion, make the hyperplane parameters come from \theta
+- [x] ensure that timestep delta is correctly accounted for. 
+- [x] add thrust limits
+- [x] compute angle between players for more than 2 players
+- [ ] Make sure forward hyperplanes work for more than 2 players
+- [x] Remove environment constraints altogether (instead of just commenting them out)
+- [x] Add goals as a parameters
+- [x] Num of shared inequality constarints should change w/ adjacency matrix. Important when ParametricGame is built from a game definition. 
+- [x] Add hyperplane plotting function 
+- [ ] Remove Plots.jl dependency
+- [ ] Invert game (follow ParametricMCPs readme)
