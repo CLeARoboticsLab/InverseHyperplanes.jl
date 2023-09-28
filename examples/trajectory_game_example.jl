@@ -31,7 +31,8 @@ using TrajectoryGamesBase:
     OpenLoopStrategy,
     JointStrategy,
     RecedingHorizonStrategy,
-    rollout
+    rollout, 
+    horizon
 using TrajectoryGamesExamples: planar_double_integrator, animate_sim_steps
 using BlockArrays: mortar, blocks, BlockArray, Block
 using GLMakie: GLMakie
@@ -40,9 +41,10 @@ using PATHSolver: PATHSolver
 using LinearAlgebra: norm_sqr, norm
 using ProgressMeter: ProgressMeter
 using Plots
+using Zygote 
 
-"Utility to set up a (two player) trajectory game."
-function setup_trajectory_game(; n_players = 2, dt = 5.0, n = 0.001, m = 100.0, couples = nothing)
+"Utility to set up a trajectory game with rotating hyperplane constraints"
+function setup_trajectory_game(; n_players = 2, horizon = ∞, dt = 5.0, n = 0.001, m = 100.0, couples = nothing)
 
     cost = let
         function stage_cost(x, u, t, θ)
@@ -100,6 +102,7 @@ function setup_trajectory_game(; n_players = 2, dt = 5.0, n = 0.001, m = 100.0, 
     agent_dynamics = cwh_satellite_2D(;
         state_bounds = (; lb = [-Inf, -Inf, -Inf, -Inf], ub = [Inf, Inf, Inf, Inf]),
         control_bounds = (; lb = [-1.0, -1.0], ub = [1.0, 1.0]),
+        horizon,
         dt,
         n
     )
@@ -514,7 +517,8 @@ function visualize_rotating_hyperplanes(states, parameters; title = "", filename
     Plots.gif(anim, fps = fps, "figures/hyperplanes_"*filename*".gif")
 end    
 
-function main()
+"Solve the forward game"
+function forward()
     # Game parameters
     horizon = 44
     dt = 5.0
@@ -535,16 +539,18 @@ function main()
     # Parameters 
     θ = mortar([initial_state, goals, weights, ωs, α0s, ρs])
 
-    game = setup_trajectory_game(; dt, n, m, couples)
+    # Set up games
+    game = setup_trajectory_game(;horizon, dt, n, m, couples)
     parametric_game = build_parametric_game(; game, horizon, N = n_players, n_couples = length(couples))
     
-    turn_length = horizon # verify this. 
-    sim_steps = let
-        n_sim_steps = horizon # verify this
-        progress = ProgressMeter.Progress(n_sim_steps)
-        receding_horizon_strategy =
+    # Simulate forward
+    turn_length = horizon 
+    receding_horizon_strategy =
             WarmStartRecedingHorizonStrategy(; game, parametric_game, turn_length, horizon, parameters = θ)
-
+    sim_steps = let
+        n_sim_steps = horizon
+        progress = ProgressMeter.Progress(n_sim_steps)
+        
         rollout(
             game.dynamics,
             receding_horizon_strategy,
@@ -555,11 +561,11 @@ function main()
         )
     end
 
-    # Save video 
-    # animate_sim_steps(game, sim_steps; live = false, framerate = 20, show_turn = true, xlims = (-200, 200), ylims = (-200, 200))
+    # MCP solution
+    solution = receding_horizon_strategy.last_solution
 
     # Plot hyperplanes
-    solution = (; x = hcat(sim_steps.xs...), u = hcat(sim_steps.us...))
+    trajectory = (; x = hcat(sim_steps.xs...), u = hcat(sim_steps.us...))
     adjacency_matrix = [false true; false false] # used in plotting only
     plot_parameters = 
         (;
@@ -574,7 +580,7 @@ function main()
             ΔT = dt
         )
     visualize_rotating_hyperplanes(
-        solution.x,
+        trajectory.x,
         plot_parameters;
         # title = string(n_players)*"p",
         koz = true,
@@ -583,5 +589,62 @@ function main()
         save_frame = 25,
     )
 
-    (;sim_steps, game)
+    (;solution, game, parametric_game)
+end
+
+function inverse_loss(observation, θ, game, parametric_game)
+
+    T = horizon(game.dynamics)
+    
+    # Predicted equilibrium 
+    predicted_soln = solve(
+            parametric_game,
+            θ;
+        # initial_guess = generate_initial_guess(;
+        #     game,
+        #     parametric_game,
+        #     horizon = T,
+        #     initial_state = θ[Block(1)],
+        # ),
+        # initial_guess = nothing, 
+        initial_guess = observation,
+        verbose = false,
+        return_primals = false
+        )
+
+    # Difference between predicted and observed
+    norm_sqr(predicted_soln.variables - observation)
+end
+
+function inverse(observation, game, parametric_game; max_grad_steps = 10, learning_rate = 1e-15)
+    # Initial parameter guess 
+    θ_guess = mortar([
+        mortar([[-100.0, 0.0, 0.0, 0.0], [0.0, -100.0, 0.0, 0.0]]),
+        mortar([[100.0, 0.0], [0.0, 100.0]]),
+        mortar([[10.0, 0.0001], [10.0, 0.0001]]),
+        [0.015] .- 0.01,
+        [3 * pi / 4],
+        [30.0],
+    ])
+
+    # Gradient wrt hyperplane parameters only 
+    for i in 1:max_grad_steps
+
+        # Gradient 
+        grad = Zygote.gradient(θ -> inverse_loss(observation, θ, game, parametric_game), θ_guess)
+
+        # Print gradients
+        println("grad: ", grad)
+
+        # Update guess 
+        θ_guess[Block(4)] -= learning_rate * block_parameters(grad[1], 2, 1, game.dynamics)[Block(4)]
+
+        println("grad ω update: ", learning_rate * block_parameters(grad[1], 2, 1, game.dynamics)[Block(4)])
+
+        # print new guess 
+        println("new ω: ", θ_guess[Block(4)])
+    end
+
+    # Print final guess
+    println("Final guess: ", θ_guess)
 end

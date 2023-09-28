@@ -182,6 +182,7 @@ function solve(
     parameter_value = zeros(problem.parameter_dimension);
     initial_guess = nothing,
     verbose = false,
+    return_primals = true,
 )
     z0 = if !isnothing(initial_guess)
         initial_guess
@@ -200,6 +201,10 @@ function solve(
         use_start = true,
     )
 
-    primals = blocks(BlockArray(z[1:sum(problem.primal_dimensions)], problem.primal_dimensions))
-    (; primals, variables = z, status, info)
+    if return_primals
+        primals = blocks(BlockArray(z[1:sum(problem.primal_dimensions)], problem.primal_dimensions))
+        return (; primals, variables = z, status, info)
+    else
+        return (; variables = z, status, info)
+    end
 end

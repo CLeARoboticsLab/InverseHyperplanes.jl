@@ -10,3 +10,5 @@
 - [x] Add hyperplane plotting function 
 - [ ] Remove Plots.jl dependency
 - [ ] Invert game (follow ParametricMCPs readme)
+- [ ] Fix stack overflows. Likely good idea to benchmark code to see where it's getting stuck? 
+- [ ] Fix stage cost so that it works with more players 
