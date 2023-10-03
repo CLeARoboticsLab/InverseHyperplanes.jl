@@ -12,3 +12,5 @@
 - [ ] Invert game (follow ParametricMCPs readme)
 - [ ] Fix stack overflows. Likely good idea to benchmark code to see where it's getting stuck? 
 - [ ] Fix stage cost so that it works with more players 
+- [ ] Make sure that inverse game can gracefully handle case when PATH doesn't find a soln
+- [ ] Perhaps only differentiate wrt hyperplane parameters (may save time)

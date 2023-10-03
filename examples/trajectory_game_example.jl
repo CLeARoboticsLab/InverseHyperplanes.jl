@@ -34,7 +34,7 @@ using TrajectoryGamesBase:
     rollout, 
     horizon
 using TrajectoryGamesExamples: planar_double_integrator, animate_sim_steps
-using BlockArrays: mortar, blocks, BlockArray, Block
+using BlockArrays: mortar, blocks, BlockArray, Block, blocksizes
 using GLMakie: GLMakie
 using Makie: Makie
 using PATHSolver: PATHSolver
@@ -42,6 +42,7 @@ using LinearAlgebra: norm_sqr, norm
 using ProgressMeter: ProgressMeter
 using Plots
 using Zygote 
+using Printf 
 
 "Utility to set up a trajectory game with rotating hyperplane constraints"
 function setup_trajectory_game(; n_players = 2, horizon = ∞, dt = 5.0, n = 0.001, m = 100.0, couples = nothing)
@@ -592,59 +593,101 @@ function forward()
     (;solution, game, parametric_game)
 end
 
-function inverse_loss(observation, θ, game, parametric_game)
-
-    T = horizon(game.dynamics)
+function inverse_loss(observation, θ, game, parametric_game; initial_guess = nothing)
     
     # Predicted equilibrium 
     predicted_soln = solve(
             parametric_game,
             θ;
-        # initial_guess = generate_initial_guess(;
-        #     game,
-        #     parametric_game,
-        #     horizon = T,
-        #     initial_state = θ[Block(1)],
-        # ),
-        # initial_guess = nothing, 
-        initial_guess = observation,
+        initial_guess, 
         verbose = false,
         return_primals = false
         )
 
     # Difference between predicted and observed
-    norm_sqr(predicted_soln.variables - observation)
+    # norm_sqr(predicted_soln.variables - observation)
+    # norm(predicted_soln.variables - observation)
+    norm_sqr(predicted_soln.variables[1:sum(parametric_game.primal_dimensions)] - observation)
 end
 
-function inverse(observation, game, parametric_game; max_grad_steps = 10, learning_rate = 1e-15)
+function inverse(observation, game, parametric_game; max_grad_steps = 10)
+    # Old
+    # learning_rate_ω = 1e-7
+    # learning_rate_ρ = 1e-1
+
+    learning_rate_ω = 1e-4
+    learning_rate_ρ = 1.5e-1
+
+    # scale_ω = 1000.0
+    scale_ω = 1.0
+
     # Initial parameter guess 
     θ_guess = mortar([
         mortar([[-100.0, 0.0, 0.0, 0.0], [0.0, -100.0, 0.0, 0.0]]),
         mortar([[100.0, 0.0], [0.0, 100.0]]),
         mortar([[10.0, 0.0001], [10.0, 0.0001]]),
-        [0.015] .- 0.01,
+        # [0.008] .* scale_ω,
+        [0.015],
         [3 * pi / 4],
-        [30.0],
+        [30.0] .- 20,
     ])
+
+    grad_norms  = []
 
     # Gradient wrt hyperplane parameters only 
     for i in 1:max_grad_steps
 
-        # Gradient 
-        grad = Zygote.gradient(θ -> inverse_loss(observation, θ, game, parametric_game), θ_guess)
+        # # Gradient 
+        # grad = Zygote.gradient(θ -> inverse_loss(observation, θ, game, parametric_game), θ_guess)
+        # grad_block = BlockArray(grad[1], blocksizes(θ_guess)[1])
 
-        # Print gradients
-        println("grad: ", grad)
+        # # Update guess 
+        # θ_guess[Block(4)] -= learning_rate_ω * grad_block[Block(4)]
+        # θ_guess[Block(6)] -= learning_rate_ρ * grad_block[Block(6)]
+
+        # # Print
+        # println(@sprintf("step %3d: ω = %7.5f ρ = %5.2f ||grad|| = %10.3f loss = %8.3f",
+        #     i,
+        #     θ_guess[Block(4)][1],
+        #     θ_guess[Block(6)][1],
+        #     norm([grad_block[Block(4)], grad_block[Block(6)]][1]),
+        #     inverse_loss(observation, θ_guess, game, parametric_game)
+        # ))
+        # push!(grad_norms, norm([grad_block[Block(4)], grad_block[Block(6)]]))
+
+        # Gradient wrt θ_i
+        function replace_theta_i(θ, i, new_val; scale = 1.0)
+            θ_new = [θ[1:i-1]; new_val * scale; θ[i+1:end]]
+            return θ_new
+        end
+
+        function gradient_wrt_theta_i(i, observation, θ, game, parametric_game; initial_guess = nothing, scale = 1.0)
+            θ_i = θ[i]
+            grad_fn = Zygote.gradient(θ_i -> inverse_loss(observation, replace_theta_i(θ, i, θ_i; scale = scale), game, parametric_game; initial_guess = initial_guess), θ_i)
+            return grad_fn[1]
+        end
+
+        grad_ω = gradient_wrt_theta_i(17, observation, θ_guess, game, parametric_game; scale = 1/scale_ω)
+        grad_ρ = gradient_wrt_theta_i(19, observation, replace_theta_i(θ_guess, 17, θ_guess[Block(4)][1]; scale = 1/scale_ω), game, parametric_game;)
 
         # Update guess 
-        θ_guess[Block(4)] -= learning_rate * block_parameters(grad[1], 2, 1, game.dynamics)[Block(4)]
+        θ_guess[Block(4)] -= [learning_rate_ω * grad_ω * scale_ω]
+        θ_guess[Block(6)] -= [learning_rate_ρ * grad_ρ]
 
-        println("grad ω update: ", learning_rate * block_parameters(grad[1], 2, 1, game.dynamics)[Block(4)])
-
-        # print new guess 
-        println("new ω: ", θ_guess[Block(4)])
+        # Print 
+        println(@sprintf("step %3d: ω = %7.5f ρ = %5.2f ||grad|| = %10.3f loss = %8.3f",
+            i,
+            θ_guess[Block(4)][1] * 1/scale_ω,
+            θ_guess[Block(6)][1],
+            # norm([grad_ω, grad_ρ][1]),
+            norm([grad_ρ][1]),
+            inverse_loss(observation, replace_theta_i(θ_guess, 17, θ_guess[Block(4)][1]; scale = 1/scale_ω), game, parametric_game)
+        ))
+        push!(grad_norms, norm([grad_ω, grad_ρ]))
     end
 
     # Print final guess
-    println("Final guess: ", θ_guess)
+    println("Final hyperplane parameters: ", θ_guess[Block(4)][1], " ", θ_guess[Block(6)][1]) 
+
+    plot(grad_norms, label = "norm of gradient", xlabel = "gradient step", ylabel = "norm of gradient", yaxis = :log)
 end
