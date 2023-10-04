@@ -9,8 +9,8 @@
 - [x] Num of shared inequality constarints should change w/ adjacency matrix. Important when ParametricGame is built from a game definition. 
 - [x] Add hyperplane plotting function 
 - [ ] Remove Plots.jl dependency
-- [ ] Invert game (follow ParametricMCPs readme)
+- [x] Invert game (follow ParametricMCPs readme)
 - [ ] Fix stack overflows. Likely good idea to benchmark code to see where it's getting stuck? 
 - [ ] Fix stage cost so that it works with more players 
 - [ ] Make sure that inverse game can gracefully handle case when PATH doesn't find a soln
-- [ ] Perhaps only differentiate wrt hyperplane parameters (may save time)
+- [ ] Add noise to position only 
