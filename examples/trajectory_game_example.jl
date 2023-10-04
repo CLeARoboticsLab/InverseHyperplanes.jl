@@ -615,8 +615,8 @@ function inverse(observation, game, parametric_game; max_grad_steps = 10)
     # learning_rate_ω = 1e-7
     # learning_rate_ρ = 1e-1
 
-    learning_rate_ω = 1e-4
-    learning_rate_ρ = 1.5e-1
+    learning_rate_ω = 1e-9
+    learning_rate_ρ = 1.5e-2
 
     # scale_ω = 1000.0
     scale_ω = 1.0
@@ -626,64 +626,51 @@ function inverse(observation, game, parametric_game; max_grad_steps = 10)
         mortar([[-100.0, 0.0, 0.0, 0.0], [0.0, -100.0, 0.0, 0.0]]),
         mortar([[100.0, 0.0], [0.0, 100.0]]),
         mortar([[10.0, 0.0001], [10.0, 0.0001]]),
-        # [0.008] .* scale_ω,
-        [0.015],
+        [0.008] .* scale_ω,
         [3 * pi / 4],
         [30.0] .- 20,
+        # [30.0]
     ])
 
+    momentum_factor = 0.6  # You can adjust this value
+
     grad_norms  = []
+    momentum_ω = zero(θ_guess[Block(4)])
+    momentum_ρ = zero(θ_guess[Block(6)])
+
+    # Print first step 
+    println(@sprintf("step %3d: ω = %7.5f ρ = %5.2f ||grad|| = %8.3f loss = %8.3f",
+        0,
+        θ_guess[Block(4)][1],
+        θ_guess[Block(6)][1],
+        norm([0, 0]),
+        inverse_loss(observation, θ_guess, game, parametric_game)
+    ))
 
     # Gradient wrt hyperplane parameters only 
     for i in 1:max_grad_steps
 
-        # # Gradient 
-        # grad = Zygote.gradient(θ -> inverse_loss(observation, θ, game, parametric_game), θ_guess)
-        # grad_block = BlockArray(grad[1], blocksizes(θ_guess)[1])
+        # Gradient 
+        grad = Zygote.gradient(θ -> inverse_loss(observation, θ, game, parametric_game), θ_guess)
+        grad_block = BlockArray(grad[1], blocksizes(θ_guess)[1])
 
-        # # Update guess 
-        # θ_guess[Block(4)] -= learning_rate_ω * grad_block[Block(4)]
-        # θ_guess[Block(6)] -= learning_rate_ρ * grad_block[Block(6)]
-
-        # # Print
-        # println(@sprintf("step %3d: ω = %7.5f ρ = %5.2f ||grad|| = %10.3f loss = %8.3f",
-        #     i,
-        #     θ_guess[Block(4)][1],
-        #     θ_guess[Block(6)][1],
-        #     norm([grad_block[Block(4)], grad_block[Block(6)]][1]),
-        #     inverse_loss(observation, θ_guess, game, parametric_game)
-        # ))
-        # push!(grad_norms, norm([grad_block[Block(4)], grad_block[Block(6)]]))
-
-        # Gradient wrt θ_i
-        function replace_theta_i(θ, i, new_val; scale = 1.0)
-            θ_new = [θ[1:i-1]; new_val * scale; θ[i+1:end]]
-            return θ_new
-        end
-
-        function gradient_wrt_theta_i(i, observation, θ, game, parametric_game; initial_guess = nothing, scale = 1.0)
-            θ_i = θ[i]
-            grad_fn = Zygote.gradient(θ_i -> inverse_loss(observation, replace_theta_i(θ, i, θ_i; scale = scale), game, parametric_game; initial_guess = initial_guess), θ_i)
-            return grad_fn[1]
-        end
-
-        grad_ω = gradient_wrt_theta_i(17, observation, θ_guess, game, parametric_game; scale = 1/scale_ω)
-        grad_ρ = gradient_wrt_theta_i(19, observation, replace_theta_i(θ_guess, 17, θ_guess[Block(4)][1]; scale = 1/scale_ω), game, parametric_game;)
+        # Update momentum
+        momentum_ω = momentum_factor * momentum_ω + (1 - momentum_factor) * grad_block[Block(4)]
+        momentum_ρ = momentum_factor * momentum_ρ + (1 - momentum_factor) * grad_block[Block(6)]
 
         # Update guess 
-        θ_guess[Block(4)] -= [learning_rate_ω * grad_ω * scale_ω]
-        θ_guess[Block(6)] -= [learning_rate_ρ * grad_ρ]
+        θ_guess[Block(4)] -= learning_rate_ω * momentum_ω
+        θ_guess[Block(6)] -= learning_rate_ρ * momentum_ρ       
 
-        # Print 
+        # Print
         println(@sprintf("step %3d: ω = %7.5f ρ = %5.2f ||grad|| = %10.3f loss = %8.3f",
             i,
-            θ_guess[Block(4)][1] * 1/scale_ω,
+            θ_guess[Block(4)][1],
             θ_guess[Block(6)][1],
-            # norm([grad_ω, grad_ρ][1]),
-            norm([grad_ρ][1]),
-            inverse_loss(observation, replace_theta_i(θ_guess, 17, θ_guess[Block(4)][1]; scale = 1/scale_ω), game, parametric_game)
+            norm([grad_block[Block(4)], grad_block[Block(6)]][1]),
+            inverse_loss(observation, θ_guess, game, parametric_game)
         ))
-        push!(grad_norms, norm([grad_ω, grad_ρ]))
+        push!(grad_norms, norm([grad_block[Block(4)], grad_block[Block(6)]]))
     end
 
     # Print final guess
