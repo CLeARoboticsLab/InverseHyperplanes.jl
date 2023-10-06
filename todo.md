@@ -14,3 +14,6 @@
 - [ ] Fix stage cost so that it works with more players 
 - [ ] Make sure that inverse game can gracefully handle case when PATH doesn't find a soln
 - [ ] Add noise to position only 
+- [ ] Figure out how to feed solutions into reconstruction error 
+- [ ] Add diferentation wrt goal state
+- [ ] Fix error with running parametric game

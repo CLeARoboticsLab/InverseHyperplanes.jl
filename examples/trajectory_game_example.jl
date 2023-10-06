@@ -43,6 +43,7 @@ using ProgressMeter: ProgressMeter
 using Plots
 using Zygote 
 using Printf 
+using UnPack: @unpack
 
 "Utility to set up a trajectory game with rotating hyperplane constraints"
 function setup_trajectory_game(; n_players = 2, horizon = ∞, dt = 5.0, n = 0.001, m = 100.0, couples = nothing)
@@ -126,6 +127,15 @@ function unpack_trajectory(flat_trajectory; dynamics::ProductDynamics)
     stack_trajectories(trajs)
 end
 
+"Utility for turning z into a tuple of matrices where each column is a timestep"
+function matrix_traj(z; dynamics::ProductDynamics)
+    horizon = Int(length(z) / (state_dim(dynamics) + control_dim(dynamics)))
+    (;
+        xs = reshape(z[1:(state_dim(dynamics) * horizon)], (state_dim(dynamics), horizon)),
+        us = reshape(z[(state_dim(dynamics) * horizon + 1):end], (control_dim(dynamics), horizon)),
+    )
+end
+
 "Utility for packing trajectory."
 function pack_trajectory(traj)
     trajs = unstack_trajectory(traj)
@@ -165,55 +175,57 @@ function build_parametric_game(; game = setup_trajectory_game(), horizon = 10, N
         θ_blocked = block_parameters(θ, N, n_couples, game.dynamics)
         player_cost(τ, θ_blocked, ii)
         end for ii in 1:N]
-
+    # fs = [(τ, θ) -> [0] for ii in 1:N]
+        
     # Dummy individual constraints.
     gs = [(τ, θ) -> [0] for _ in 1:N]
     hs = [(τ, θ) -> [0] for _ in 1:N]
 
     # Shared equality constraints.
     g̃ = (τ, θ) -> let
-        (; xs, us) = unpack_trajectory(τ; game.dynamics)
-        θ_blocked = block_parameters(θ, N, n_couples, game.dynamics)
+        # (; xs, us) = unpack_trajectory(τ; game.dynamics)
+        # θ_blocked = block_parameters(θ, N, n_couples, game.dynamics)
 
-        initial_state = θ_blocked[Block(1)]
+        # initial_state = θ_blocked[Block(1)]
 
-        # Force all players to start at the given initial condition.
-        g̃1 = xs[1] - initial_state
+        # # Force all players to start at the given initial condition.
+        # g̃1 = xs[1] - initial_state
 
-        # Dynamics constraints.
-        ts = Iterators.eachindex(xs)
-        g̃2 = mapreduce(vcat, ts[2:end]) do t
-            xs[t] - game.dynamics(xs[t - 1], us[t - 1])
-        end
+        # # Dynamics constraints.
+        # ts = Iterators.eachindex(xs)
+        # g̃2 = mapreduce(vcat, ts[2:end]) do t
+        #     xs[t] - game.dynamics(xs[t - 1], us[t - 1])
+        # end
 
-        vcat(g̃1, g̃2)
+        # vcat(g̃1, g̃2)
+        [0.0]
     end
 
     # Shared inequality constraints.
     h̃ =
         (τ, θ) -> let
-            (; xs, us) = unpack_trajectory(τ; game.dynamics)
-            θ_blocked = block_parameters(θ, N, n_couples, game.dynamics)
+            # (; xs, us) = unpack_trajectory(τ; game.dynamics)
+            # θ_blocked = block_parameters(θ, N, n_couples, game.dynamics)
 
-            # Collision-avoidance constraint (hyperplanes in this case)
-            h̃1 = game.coupling_constraints(xs, us, θ_blocked)
+            # # Collision-avoidance constraint (hyperplanes in this case)
+            # h̃1 = game.coupling_constraints(xs, us, θ_blocked)
 
-            # Actuator/state limits.
-            actuator_constraint = TrajectoryGamesBase.get_constraints_from_box_bounds(
-                control_bounds(game.dynamics),
-            )
-            h̃3 = mapreduce(vcat, us) do u
-                actuator_constraint(u)
-            end
+            # # Actuator/state limits.
+            # actuator_constraint = TrajectoryGamesBase.get_constraints_from_box_bounds(
+            #     control_bounds(game.dynamics),
+            # )
+            # h̃3 = mapreduce(vcat, us) do u
+            #     actuator_constraint(u)
+            # end
 
-            state_constraint =
-                TrajectoryGamesBase.get_constraints_from_box_bounds(state_bounds(game.dynamics))
-            h̃4 = mapreduce(vcat, xs) do x
-                state_constraint(x)
-            end
+            # state_constraint =
+            #     TrajectoryGamesBase.get_constraints_from_box_bounds(state_bounds(game.dynamics))
+            # h̃4 = mapreduce(vcat, xs) do x
+            #     state_constraint(x)
+            # end
 
-            vcat(h̃1, h̃3, h̃4)
-            # vcat(h̃3, h̃4)
+            # vcat(h̃1, h̃3, h̃4)
+            [0.0]
         end
 
     ParametricGame(;
@@ -228,15 +240,17 @@ function build_parametric_game(; game = setup_trajectory_game(), horizon = 10, N
         ],
         equality_dimensions = [1 for _ in 1:N],
         inequality_dimensions = [1 for _ in 1:N],
-        shared_equality_dimension = state_dim(game.dynamics) +
-                                    (horizon - 1) * state_dim(game.dynamics),
-        shared_inequality_dimension = horizon * (
-            1 + # make this change with number of hyperplane constraints 
-            sum(isfinite.(control_bounds(game.dynamics).lb)) +
-            sum(isfinite.(control_bounds(game.dynamics).ub)) +
-            sum(isfinite.(state_bounds(game.dynamics).lb)) +
-            sum(isfinite.(state_bounds(game.dynamics).ub))
-        ),
+        # shared_equality_dimension = state_dim(game.dynamics) +
+        #                             (horizon - 1) * state_dim(game.dynamics),
+        shared_equality_dimension = 1,
+        # shared_inequality_dimension = horizon * (
+        #     1 + # make this change with number of hyperplane constraints 
+        #     sum(isfinite.(control_bounds(game.dynamics).lb)) +
+        #     sum(isfinite.(control_bounds(game.dynamics).ub)) +
+        #     sum(isfinite.(state_bounds(game.dynamics).lb)) +
+        #     sum(isfinite.(state_bounds(game.dynamics).ub))
+        # ),
+        shared_inequality_dimension = 1
     )
 end
 
@@ -482,7 +496,7 @@ function visualize_rotating_hyperplanes(states, parameters; title = "", filename
             # Plot hyperplane normal
             ni =
                 parameters.ρs[couple_idx] *
-                n(i, θs[couple_idx], parameters.αs[couple_idx], parameters.ωs[couple_idx])
+                n(i, θs[couple_idx], parameters.α0s[couple_idx], parameters.ωs[couple_idx])
             # Plots.plot!(
             #     [states[position_indices[couple[2], 1], i], states[position_indices[couple[2], 1], i] + ni[1]],
             #     [states[position_indices[couple[2], 2], i], states[position_indices[couple[2], 2], i] + ni[2]],
@@ -543,8 +557,8 @@ function forward()
     θ = mortar([initial_state, goals, weights, ωs, α0s, ρs])
 
     # Set up games
-    game = setup_trajectory_game(;horizon, dt, n, m, couples)
-    parametric_game = build_parametric_game(; game, horizon, N = n_players, n_couples = length(couples))
+    @elapsed game = setup_trajectory_game(;horizon, dt, n, m, couples)
+    @elapsed parametric_game = build_parametric_game(; game, horizon, N = n_players, n_couples = length(couples))
     
     # Simulate forward
     turn_length = horizon 
@@ -578,7 +592,7 @@ function forward()
             adjacency_matrix, 
             couples = findall(adjacency_matrix),
             ωs,
-            αs = zeros(length(couples)),
+            α0s = zeros(length(couples)),
             ρs,
             ΔT = dt
         )
@@ -612,38 +626,65 @@ function inverse_loss(observation, θ, game, parametric_game; initial_guess = no
 end
 
 "Setup parameteres for the forward game, inverse game, and the MC analysis parameters"
-function setup()
+function setup_experiment()
 
     # ---- FORWARD GAME PARAMETERS ----
 
+    # Game parameters
+    horizon = 44
+    dt = 5.0
+    initial_state::Vector{Float64} = mortar([[-100.0, 0.0, 0.0, 0.0], [0.0, -100.0, 0.0, 0.0]])
+    goals::Vector{Float64} = mortar([[100.0, 0.0], [0.0, 100.0]]) # TEMPORARY 
+    ωs::Vector{Float64} = [0.015]
+    α0s::Vector{Float64} = [3 * pi / 4]
+    ρs::Vector{Float64} = [30.0]
+    couples = [(1, 2)]
+    weights::Vector{Float64} = mortar([[10.0, 0.0001], [10.0, 0.0001]])
+    n_players = 2
+    n_states_per_player = 4 
+    m   = 100.0 # kg
+    r₀ = (400 + 6378.137) # km
+    grav_param  = 398600.4418 # km^3/s^2
+    n = sqrt(grav_param/(r₀^3)) # rad/s   
+
+    # Parameters 
+    # Initialize to avoid type instabilities
+    θ = mortar([initial_state, goals, weights, ωs, α0s, ρs])
+
+    # Set up games
+    game = setup_trajectory_game(;horizon, dt, n, m, couples)
+    parametric_game = build_parametric_game(; game, horizon, N = n_players, n_couples = length(couples))
+
     # ---- INVERSE GAME PARAMETERS ----
 
-    # ---- MONTE CARLO PARAMETERS ----
-
-
-end
-
-"Solve the inverse game taking gradient steps"
-function inverse(observation, game, parametric_game; max_grad_steps = 10)
-
     # Step parameters
-    learning_rate_x0_pos = 1e-3
+    learning_rate_x0_pos = 5.0e-3
     learning_rate_x0_vel = 1e-6
     learning_rate_ω = 1e-9
     learning_rate_ρ = 1.5e-2
     momentum_factor = 0.6  # You can adjust this value
 
-    x0_truth = mortar([[-100.0, 0.0, 0.0, 0.0], [0.0, -100.0, 0.0, 0.0]])
+    x0_truth = initial_state
 
     # Initial parameter guess 
     θ_guess = mortar([
-        mortar([[-90.0, 0.0, 0.0, 0.0], [0.0, -110.0, 0.0, 0.0]]),
-        mortar([[100.0, 0.0], [0.0, 100.0]]),
-        mortar([[10.0, 0.0001], [10.0, 0.0001]]),
+        initial_state,
+        goals,
+        weights,
         [0.008], # From cited paper
         [3 * pi / 4],
         [10.0]
     ])
+
+    # ---- MONTE CARLO PARAMETERS ----
+
+
+    # ---- Pack everything ----
+    (;game, parametric_game, θ, θ_guess, learning_rate_x0_pos, learning_rate_x0_vel, learning_rate_ω, learning_rate_ρ, momentum_factor, x0_truth, ωs, α0s, ρs)
+end
+
+"Solve the inverse game taking gradient steps"
+function inverse(observation, game_setup; max_grad_steps = 10, tol = 1e-1)
 
     # State indices
     n_players = num_players(game.dynamics)
@@ -660,7 +701,7 @@ function inverse(observation, game, parametric_game; max_grad_steps = 10)
     ]
 
     # Print first step 
-    println(@sprintf("%3d: Δx0 = %3.0f ω = %7.5f ρ = %5.2f ||∇L|| = %7.3f L = %8.3f",
+    println(@sprintf("%3d: Δx0 = %2.0f ω = %7.5f ρ = %5.2f ||∇L|| = %6.3f L = %6.3f",
         0,
         norm(θ_guess[Block(1)] - x0_truth),
         θ_guess[Block(4)][1],
@@ -668,6 +709,9 @@ function inverse(observation, game, parametric_game; max_grad_steps = 10)
         NaN,
         inverse_loss(observation, θ_guess, game, parametric_game)
     ))
+
+    # Set initial position guess as the first state in the observation 
+    θ_guess[Block(1)] = observation[1:state_dim(game.dynamics)]
 
     # Gradient wrt hyperplane parameters only 
     grad_norms  = []
@@ -679,6 +723,11 @@ function inverse(observation, game, parametric_game; max_grad_steps = 10)
 
         # Gradient 
         grad = Zygote.gradient(θ -> inverse_loss(observation, θ, game, parametric_game), θ_guess)
+        # grad = Zygote.gradient(θ_guess) do θ_outer
+        #     Zygote.forwarddiff(θ_outer;) do θ_inner
+        #         inverse_loss(observation, θ_inner, game, parametric_game)
+        #     end
+        # end        
         grad_block = BlockArray(grad[1], blocksizes(θ_guess)[1])
 
         # Update momentum
@@ -691,31 +740,46 @@ function inverse(observation, game, parametric_game; max_grad_steps = 10)
         θ_guess[Block(1)][indices_position] -= learning_rate_x0_pos * momentum_x0_pos
         θ_guess[Block(1)][indices_velocity] -= learning_rate_x0_vel * momentum_x0_vel
         θ_guess[Block(4)] -= learning_rate_ω * momentum_ω
-        θ_guess[Block(6)] -= learning_rate_ρ * momentum_ρ       
+        θ_guess[Block(6)] -= learning_rate_ρ * momentum_ρ     
+        
+        # Calculate norm of momenta with learning rate
+        momentum_norm = norm([
+            learning_rate_x0_pos * momentum_x0_pos,
+            learning_rate_x0_vel * momentum_x0_vel,
+            learning_rate_ω * momentum_ω,
+            learning_rate_ρ * momentum_ρ,
+        ])
 
         # Print
-        println(@sprintf("%3d: Δx0 = %3.0f ω = %7.5f ρ = %5.2f ||∇L|| = %7.3f L = %8.3f",
+        println(@sprintf("%3d: Δx0 = %2.0f ω = %7.5f ρ = %5.2f ||p|| = %6.3f L = %6.3f",
             i,
             norm(θ_guess[Block(1)] - x0_truth),
             θ_guess[Block(4)][1],
             θ_guess[Block(6)][1],
-            norm([grad_block[Block(4)], grad_block[Block(6)]][1]),
+            # norm([grad_block[Block(4)], grad_block[Block(6)]][1]),
+            momentum_norm,
             inverse_loss(observation, θ_guess, game, parametric_game)
         ))
         push!(grad_norms, norm([grad_block[Block(4)], grad_block[Block(6)]]))
+
+        # Break if momentum norm is small enough
+        if momentum_norm < tol
+            break
+        end
     end
 
     # Print final guess
     println("Final hyperplane parameters: ", θ_guess[Block(4)][1], " ", θ_guess[Block(6)][1]) 
 
     # Return parameters
-    return θ_guess
+    return true, θ_guess
 
-    # plot(grad_norms, label = "norm of gradient", xlabel = "gradient step", ylabel = "norm of gradient", yaxis = :log)
 end
 
 "Run Monte Carlo simulation for a sequence of noise levels"
-function mc(trials, game_setup, solution_forward)
+function mc(trials, setup_struct, solution_forward)
+
+    @unpack game, parametric_game, θ_guess, rng = setup_struct
 
     # ---- Noise levels ----
     # noise_levels = 0.0:0.1:2.5
@@ -723,42 +787,49 @@ function mc(trials, game_setup, solution_forward)
 
     # ---- Monte Carlo ----
     println("Starting Monte Carlo for ", length(noise_levels), " noise levels and ", trials, " trials each.")
-    println("True parameters: ", game_setup.ωs, " ", game_setup.αs, " ", game_setup.ρs)
+    println("True parameters: ", ωs, " ", α0s, " ", ρs)
     
     # Initialize results array 1x7 empty array of floats
     results = zeros(Float64, 1, 7)
+
+    # Setup solution as a matrix
+    solution_forward_matrix = matrix_traj(solution_forward; game.dynamics)
 
     for noise_level in noise_levels
         println("Noise level: ", noise_level)
 
         for i in 1:trials
-            # Assemble noisy observation ( TODO unknown initial conditons)
-            observation = (;
-                x = hcat(solution_forward.x[:,1], solution_forward.x[:,2:end] .+ noise_level * randn(rng, size(solution_forward.x[:,2:end]))),
-                u = hcat(solution_forward.u[:,1], solution_forward.u[:,2:end] .+ noise_level * randn(rng, size(solution_forward.u[:,2:end]))),
-            )
-
             # Assemble noisy observation 
             # TODO Add noise to positions only
             observation = solution_forward.variables[1:sum(parametric_game.primal_dimensions)] + noise_level * randn(rng, sum(parametric_game.primal_dimensions))
 
-
             # Initialize result vector with NaN
-            result = ones(Float64, 1, 7) * NaN
+            result = ones(Float64, 1, 6) * NaN
 
             # Solve inverse game
-            converged_inverse, solution_inverse = inverse(observation, game_setup)
+            converged_inverse, inverse_parameters = inverse(observation, game, parametric_game)
+
+            # Compute trajectory for inverse game
+            solution_inverse = solve(
+                parametric_game,
+                inverse_parameters;
+                θ_guess, 
+                verbose = false,
+                return_primals = false
+            )
+
+            # Setup solution as a matrix
+            solution_inverse_matrix = matrix_traj(solution_inverse; game.dynamics)
 
             # Compute trajectory reconstruction error
-            reconstruction_error = compute_rec_error(solution_forward, solution_inverse, game_setup)
+            reconstruction_error = compute_rec_error(solution_forward_matrix, solution_inverse_matrix, setup_struct)
 
             # Assemble result matrix
             result = [
                 noise_level,
                 converged_inverse ? 1.0 : 0.0,
-                solution_inverse.ωs[1],
-                solution_inverse.αs[1],
-                solution_inverse.ρs[1],
+                inverse_parameters[Block(4)][1],
+                inverse_parameters[Block(6)][1],
                 reconstruction_error,
                 solution_inverse.time,
             ]
@@ -777,14 +848,12 @@ function mc(trials, game_setup, solution_forward)
                 round(result[2], digits = 1),
                 " ω: ",
                 round(result[3], digits = 3),
-                " α: ",
-                round(result[4], digits = 3),
                 " ρ: ",
-                round(result[5], digits = 3),
+                round(result[4], digits = 3),
                 " Error: ",
-                round(result[6], digits = 5),
+                round(result[5], digits = 5),
                 " Time: ",
-                round(result[7], digits = 3),
+                round(result[6], digits = 3),
             )
 
             # Stop if first noise level 
@@ -806,9 +875,9 @@ function mc(trials, game_setup, solution_forward)
             "Convergence rate: ",
             num_converged / trials,
             " error = ",
-            sum(results[idx_converged, 6]) / num_converged,
+            sum(results[idx_converged, 5]) / num_converged,
             " time = ",
-            sum(results[idx_converged, 7]) / num_converged,
+            sum(results[idx_converged, 6]) / num_converged,
         )
     end 
 
@@ -817,10 +886,9 @@ function mc(trials, game_setup, solution_forward)
         noise_level = results[:, 1],
         converged = results[:, 2],
         ω = results[:, 3],
-        α = results[:, 4],
-        ρ = results[:, 5],
-        reconstruction_error = results[:, 6],
-        time = results[:, 7],
+        ρ = results[:, 4],
+        reconstruction_error = results[:, 4],
+        time = results[:, 6],
     )
     CSV.write("mc_noise.csv", df, header = false)
 
@@ -943,4 +1011,30 @@ function iqr(samples)
     # Find the IQR value
     iqr_result = median_value_of_q3 - median_value_of_q1
     return iqr_result
+end
+
+"Compute trajectory reconstruction error. See Peters et al. 2021 experimental section"
+function compute_rec_error(solution_forward, solution_inverse, game_setup)
+
+    n_players = num_players(game)
+    n_states_per_player = state_dim(game.dynamics.subsystems[1])
+    horizon = size(solution_forward.x, 2)
+
+    # Position indices 
+    position_indices = vcat(
+            [[1 2] .+ (player - 1) * n_states_per_player for player in 1:(n_players)]...,
+        )
+
+    # Compute sum of norms
+    reconstruction_error = 0
+    for player in 1:n_players
+        for t in 1:horizon
+            reconstruction_error += norm(
+                solution_forward.x[position_indices[player, :], t] -
+                solution_inverse.x[position_indices[player, :], t],
+            )
+        end
+    end
+
+    1/(n_players * horizon) * reconstruction_error
 end
