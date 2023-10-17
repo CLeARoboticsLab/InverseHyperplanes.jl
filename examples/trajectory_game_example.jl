@@ -580,23 +580,7 @@ function forward(θ, game_setup)
         save_frame = 25,
     )
 
-    (;solution)
-end
-
-"Loss function. Norm square of difference between observed and predicted primals"
-function inverse_loss(observation, θ, game, parametric_game; initial_guess = nothing)
-    
-    # Predicted equilibrium 
-    predicted_soln = solve(
-            parametric_game,
-            θ;
-        initial_guess, 
-        verbose = false,
-        return_primals = false
-        )
-
-    # Difference between predicted and observed
-    norm_sqr(predicted_soln.variables[1:sum(parametric_game.primal_dimensions)] - observation)
+    solution
 end
 
 "Setup parameteres for the forward game, inverse game, and the MC analysis parameters"
@@ -634,7 +618,8 @@ function setup_experiment()
     learning_rate_x0_vel = 1e-6
     learning_rate_ω = 1e-9
     learning_rate_ρ = 1.5e-2
-    momentum_factor = 0.6  # You can adjust this value
+    momentum_factor = 0.6 
+    learning_parameters = (; learning_rate_x0_pos, learning_rate_x0_vel, learning_rate_ω, learning_rate_ρ, momentum_factor)
 
     # Initial parameter guess 
     θ_guess = mortar([
@@ -643,44 +628,60 @@ function setup_experiment()
         weights,
         [0.008], # From cited paper
         [3 * pi / 4],
-        [30.0]
+        [10.0]
     ])
-
+    
     # ---- MONTE CARLO PARAMETERS ----
 
     # ---- Pack everything ----
-    (;game, parametric_game, dt, θ, θ_truth, couples, learning_rate_x0_pos, learning_rate_x0_vel, learning_rate_ω, learning_rate_ρ, momentum_factor)
+    (;game, parametric_game, dt, θ_guess, θ_truth, couples, learning_parameters)
+end
+
+"Loss function. Norm square of difference between observed and predicted primals"
+function inverse_loss(observation, θ, parametric_game; initial_guess = nothing)
+    
+    # Predicted equilibrium 
+    predicted = solve(
+            parametric_game,
+            θ;
+        initial_guess, 
+        verbose = false,
+        return_primals = false
+        )
+
+    # Difference between predicted and observed
+    norm_sqr(predicted.variables[1:sum(parametric_game.primal_dimensions)] - observation)
 end
 
 "Solve the inverse game taking gradient steps"
-function inverse(observation, game_setup; max_grad_steps = 10, tol = 1e-1)
+function inverse(observation, θ_guess, setup; max_grad_steps = 10, tol = 1e-1)
+
+    @unpack game, parametric_game, θ_truth, learning_parameters = setup
+    @unpack learning_rate_x0_pos, learning_rate_x0_vel, learning_rate_ω, learning_rate_ρ, momentum_factor = learning_parameters
 
     # State indices
     n_players = num_players(game.dynamics)
-    dim_state = state_dim(game.dynamics.subsystems[1])
+    n_states_per_player = state_dim(game.dynamics.subsystems[1])
     base_indices_position = [1, 2]
     base_indices_velocity = [3, 4]
     indices_position = [
-        (index .+ (player - 1) * dim_state) for player in 1:n_players for
+        (index .+ (player - 1) * n_states_per_player) for player in 1:n_players for
         index in base_indices_position
     ]
     indices_velocity = [
-        (index .+ (player - 1) * dim_state) for player in 1:n_players for
+        (index .+ (player - 1) * n_states_per_player) for player in 1:n_players for
         index in base_indices_velocity
     ]
 
     # Print first step 
     println(@sprintf("%3d: Δx0 = %2.0f ω = %7.5f ρ = %5.2f ||∇L|| = %6.3f L = %6.3f",
         0,
-        norm(θ_guess[Block(1)] - x0_truth),
+        norm(θ_guess[Block(1)] - θ_truth[Block(1)]),
         θ_guess[Block(4)][1],
         θ_guess[Block(6)][1],
         NaN,
-        inverse_loss(observation, θ_guess, game, parametric_game)
+        inverse_loss(observation, θ_guess, parametric_game)
     ))
-
-    # Set initial position guess as the first state in the observation 
-    θ_guess[Block(1)] = observation[1:state_dim(game.dynamics)]
 
     # Gradient wrt hyperplane parameters only 
     grad_norms  = []
@@ -688,10 +689,11 @@ function inverse(observation, game_setup; max_grad_steps = 10, tol = 1e-1)
     momentum_x0_vel = zero(θ_guess[Block(1)][indices_velocity])
     momentum_ω = zero(θ_guess[Block(4)])
     momentum_ρ = zero(θ_guess[Block(6)])
+    θ_guess = copy(θ_guess)
     for i in 1:max_grad_steps
 
         # Gradient 
-        grad = Zygote.gradient(θ -> inverse_loss(observation, θ, game, parametric_game), θ_guess)
+        grad = Zygote.gradient(θ -> inverse_loss(observation, θ, parametric_game), θ_guess)
         # grad = Zygote.gradient(θ_guess) do θ_outer
         #     Zygote.forwarddiff(θ_outer;) do θ_inner
         #         inverse_loss(observation, θ_inner, game, parametric_game)
@@ -722,17 +724,19 @@ function inverse(observation, game_setup; max_grad_steps = 10, tol = 1e-1)
         # Print
         println(@sprintf("%3d: Δx0 = %2.0f ω = %7.5f ρ = %5.2f ||p|| = %6.3f L = %6.3f",
             i,
-            norm(θ_guess[Block(1)] - x0_truth),
+            norm(θ_guess[Block(1)] - θ_truth[Block(1)]),
             θ_guess[Block(4)][1],
             θ_guess[Block(6)][1],
             # norm([grad_block[Block(4)], grad_block[Block(6)]][1]),
             momentum_norm,
-            inverse_loss(observation, θ_guess, game, parametric_game)
+            inverse_loss(observation, θ_guess, parametric_game)
         ))
         push!(grad_norms, norm([grad_block[Block(4)], grad_block[Block(6)]]))
 
         # Break if momentum norm is small enough
         if momentum_norm < tol
+            # Print momentum norm and break 
+            println("Stopping: Momentum norm = ", momentum_norm, " < ", tol) 
             break
         end
     end
@@ -741,7 +745,7 @@ function inverse(observation, game_setup; max_grad_steps = 10, tol = 1e-1)
     println("Final hyperplane parameters: ", θ_guess[Block(4)][1], " ", θ_guess[Block(6)][1]) 
 
     # Return parameters
-    return true, θ_guess
+    return θ_guess
 
 end
 
