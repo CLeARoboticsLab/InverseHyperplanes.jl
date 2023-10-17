@@ -44,6 +44,10 @@ using Plots
 using Zygote 
 using Printf 
 using UnPack: @unpack
+using Random: MersenneTwister
+using DataFrames
+using CSV 
+using Statistics: median
 
 "Utility to set up a trajectory game with rotating hyperplane constraints"
 function setup_trajectory_game(; n_players = 2, horizon = ∞, dt = 5.0, n = 0.001, m = 100.0, couples = nothing)
@@ -128,12 +132,9 @@ function unpack_trajectory(flat_trajectory; dynamics::ProductDynamics)
 end
 
 "Utility for turning z into a tuple of matrices where each column is a timestep"
-function matrix_traj(z; dynamics::ProductDynamics)
-    horizon = Int(length(z) / (state_dim(dynamics) + control_dim(dynamics)))
-    (;
-        xs = reshape(z[1:(state_dim(dynamics) * horizon)], (state_dim(dynamics), horizon)),
-        us = reshape(z[(state_dim(dynamics) * horizon + 1):end], (control_dim(dynamics), horizon)),
-    )
+function matrix_traj(primals, dynamics::ProductDynamics)
+    primals_unpacked = unpack_trajectory(mortar(primals); dynamics)
+    (; xs = reduce(hcat, primals_unpacked.xs), us = reduce(hcat, primals_unpacked.us))
 end
 
 "Utility for packing trajectory."
@@ -621,7 +622,7 @@ function setup_experiment()
     momentum_factor = 0.6 
     learning_parameters = (; learning_rate_x0_pos, learning_rate_x0_vel, learning_rate_ω, learning_rate_ρ, momentum_factor)
 
-    # Initial parameter guess 
+    # Initial parameter guess TODO remove this. Shouldn't be part of the setup struct 
     θ_guess = mortar([
         initial_state,
         goals,
@@ -632,16 +633,17 @@ function setup_experiment()
     ])
     
     # ---- MONTE CARLO PARAMETERS ----
+    rng = MersenneTwister(1234)
 
     # ---- Pack everything ----
-    (;game, parametric_game, dt, θ_guess, θ_truth, couples, learning_parameters)
+    (;game, parametric_game, dt, θ_guess, θ_truth, couples, learning_parameters, rng)
 end
 
 "Loss function. Norm square of difference between observed and predicted primals"
-function inverse_loss(observation, θ, parametric_game; initial_guess = nothing)
+function inverse_loss(observation, θ, game, parametric_game; initial_guess = nothing)
     
     # Predicted equilibrium 
-    predicted = solve(
+    solution_predicted = solve(
             parametric_game,
             θ;
         initial_guess, 
@@ -649,14 +651,28 @@ function inverse_loss(observation, θ, parametric_game; initial_guess = nothing)
         return_primals = false
         )
 
-    # Difference between predicted and observed
-    norm_sqr(predicted.variables[1:sum(parametric_game.primal_dimensions)] - observation)
+    # TODO Should this be repeated here? Perhaps make a function for the 
+    n_players = num_players(game.dynamics)
+    n_states_per_player = state_dim(game.dynamics.subsystems[1])
+    n_controls_per_player = control_dim(game.dynamics.subsystems[1])
+    T = horizon(game.dynamics)
+
+    # Norm sqr of difference between predicted and observed (states only)
+    norm_sqr(
+        solution_predicted.variables[1:sum(parametric_game.primal_dimensions)][reduce(
+            vcat,
+            [
+                (1:(T * n_states_per_player)) .+
+                (n_player - 1) * T * (n_states_per_player + n_controls_per_player) for n_player in 1:n_players
+            ],
+        )] .- observation,
+    )
 end
 
 "Solve the inverse game taking gradient steps"
-function inverse(observation, θ_guess, setup; max_grad_steps = 10, tol = 1e-1)
+function inverse(observation, θ_guess, game_setup; max_grad_steps = 10, tol = 1e-1, verbose = false)
 
-    @unpack game, parametric_game, θ_truth, learning_parameters = setup
+    @unpack game, parametric_game, θ_truth, learning_parameters = game_setup
     @unpack learning_rate_x0_pos, learning_rate_x0_vel, learning_rate_ω, learning_rate_ρ, momentum_factor = learning_parameters
 
     # State indices
@@ -674,13 +690,13 @@ function inverse(observation, θ_guess, setup; max_grad_steps = 10, tol = 1e-1)
     ]
 
     # Print first step 
-    println(@sprintf("%3d: Δx0 = %2.0f ω = %7.5f ρ = %5.2f ||∇L|| = %6.3f L = %6.3f",
+    verbose && println(@sprintf("%3d: Δx0 = %2.0f ω = %7.5f ρ = %5.2f ||∇L|| = %6.3f L = %6.3f",
         0,
         norm(θ_guess[Block(1)] - θ_truth[Block(1)]),
         θ_guess[Block(4)][1],
         θ_guess[Block(6)][1],
         NaN,
-        inverse_loss(observation, θ_guess, parametric_game)
+        inverse_loss(observation, θ_guess, game, parametric_game)
     ))
 
     # Gradient wrt hyperplane parameters only 
@@ -693,7 +709,7 @@ function inverse(observation, θ_guess, setup; max_grad_steps = 10, tol = 1e-1)
     for i in 1:max_grad_steps
 
         # Gradient 
-        grad = Zygote.gradient(θ -> inverse_loss(observation, θ, parametric_game), θ_guess)
+        grad = Zygote.gradient(θ -> inverse_loss(observation, θ, game, parametric_game), θ_guess)
         # grad = Zygote.gradient(θ_guess) do θ_outer
         #     Zygote.forwarddiff(θ_outer;) do θ_inner
         #         inverse_loss(observation, θ_inner, game, parametric_game)
@@ -721,38 +737,69 @@ function inverse(observation, θ_guess, setup; max_grad_steps = 10, tol = 1e-1)
             learning_rate_ρ * momentum_ρ,
         ])
 
+        # New solution 
+        loss_new = inverse_loss(observation, θ_guess, game, parametric_game)
+
         # Print
-        println(@sprintf("%3d: Δx0 = %2.0f ω = %7.5f ρ = %5.2f ||p|| = %6.3f L = %6.3f",
+        verbose && println(@sprintf("%3d: Δx0 = %2.0f ω = %7.5f ρ = %5.2f ||p|| = %6.3f L = %6.3f",
             i,
             norm(θ_guess[Block(1)] - θ_truth[Block(1)]),
             θ_guess[Block(4)][1],
             θ_guess[Block(6)][1],
             # norm([grad_block[Block(4)], grad_block[Block(6)]][1]),
             momentum_norm,
-            inverse_loss(observation, θ_guess, parametric_game)
+            loss_new,
         ))
         push!(grad_norms, norm([grad_block[Block(4)], grad_block[Block(6)]]))
 
         # Break if momentum norm is small enough
         if momentum_norm < tol
             # Print momentum norm and break 
-            println("Stopping: Momentum norm = ", momentum_norm, " < ", tol) 
+            verbose && println("Stopping: Momentum norm = ", momentum_norm, " < ", tol) 
             break
         end
     end
 
     # Print final guess
-    println("Final hyperplane parameters: ", θ_guess[Block(4)][1], " ", θ_guess[Block(6)][1]) 
+    verbose && println("Final hyperplane parameters: ", θ_guess[Block(4)][1], " ", θ_guess[Block(6)][1]) 
 
     # Return parameters
-    return θ_guess
+    return true, θ_guess # TODO Return an actual convergence variable, not just always true.
 
 end
 
 "Run Monte Carlo simulation for a sequence of noise levels"
-function mc(trials, setup_struct, solution_forward)
+function mc(trials, game_setup, solution_forward; kwargs...)
 
-    @unpack game, parametric_game, θ_guess, rng = setup_struct
+    @unpack game, parametric_game, θ_guess, θ_truth, rng = game_setup
+
+    # ---- Useful functions/numbers ----
+    n_players = num_players(game)
+    n_states_per_player = state_dim(game.dynamics.subsystems[1])
+    n_controls_per_player = control_dim(game.dynamics.subsystems[1])
+    T = horizon(game.dynamics)
+
+    "Compute trajectory reconstruction error. See Peters et al. 2021 experimental section"
+    function compute_rec_error(solution_forward, solution_inverse)
+
+        # Position indices 
+        position_indices = vcat(
+                [[1 2] .+ (player - 1) * n_states_per_player for player in 1:(n_players)]...,
+            )
+
+        # Sum of norms
+        reconstruction_error = 0
+        for player in 1:n_players
+            for t in 1:horizon(game.dynamics)
+                reconstruction_error += norm(
+                    solution_forward.x[position_indices[player, :], t] -
+                    solution_inverse.x[position_indices[player, :], t],
+                )
+            end
+        end
+
+        1/(n_players * horizon(game.dynamics)) * reconstruction_error
+    end
 
     # ---- Noise levels ----
     # noise_levels = 0.0:0.1:2.5
@@ -760,42 +807,52 @@ function mc(trials, setup_struct, solution_forward)
 
     # ---- Monte Carlo ----
     println("Starting Monte Carlo for ", length(noise_levels), " noise levels and ", trials, " trials each.")
-    println("True parameters: ", ωs, " ", α0s, " ", ρs)
+    println("True parameters: ", θ_truth[Block(4)][1]," ", θ_truth[Block(6)][1])
     
-    # Initialize results array 1x7 empty array of floats
-    results = zeros(Float64, 1, 7)
+    # Initialize results array 1x6 empty array of floats
+    results = zeros(Float64, 1, 6)
 
     # Setup solution as a matrix
-    solution_forward_matrix = matrix_traj(solution_forward; game.dynamics)
+    primals_forward = solution_forward.variables[1:sum(parametric_game.primal_dimensions)]
 
+    # Copy guess 
+    θ_guess = copy(θ_guess)
     for noise_level in noise_levels
         println("Noise level: ", noise_level)
 
         for i in 1:trials
-            # Assemble noisy observation 
+            # Extract states only and add noise
             # TODO Add noise to positions only
-            observation = solution_forward.variables[1:sum(parametric_game.primal_dimensions)] + noise_level * randn(rng, sum(parametric_game.primal_dimensions))
+            observation =
+                primals_forward[reduce(
+                    vcat,
+                    [
+                        (1:(T * n_states_per_player)) .+
+                        (n_player - 1) * T * (n_states_per_player + n_controls_per_player) for
+                        n_player in 1:n_players
+                    ],
+                )] + noise_level * randn(rng, T * n_states_per_player * n_players)
 
             # Initialize result vector with NaN
             result = ones(Float64, 1, 6) * NaN
 
-            # Solve inverse game
-            converged_inverse, inverse_parameters = inverse(observation, game, parametric_game)
+            # Guess initial position as first observed position with zero velocity TODO make this better
+            # θ_guess[Block(1)] = BlockArray(observation[:,1], [n_states_per_player for _ in 1:n_players])
+
+            # Solve inverse game with guessed parameter
+            converged_inverse, inverse_parameters = inverse(observation, θ_guess, game_setup; kwargs...)
 
             # Compute trajectory for inverse game
-            solution_inverse = solve(
+            inverse_elapsed = @elapsed solution_inverse = solve(
                 parametric_game,
                 inverse_parameters;
-                θ_guess, 
+                initial_guess = nothing, 
                 verbose = false,
                 return_primals = false
             )
 
-            # Setup solution as a matrix
-            solution_inverse_matrix = matrix_traj(solution_inverse; game.dynamics)
-
             # Compute trajectory reconstruction error
-            reconstruction_error = compute_rec_error(solution_forward_matrix, solution_inverse_matrix, setup_struct)
+            reconstruction_error = compute_rec_error(primals_forward, solution_inverse.primals)
 
             # Assemble result matrix
             result = [
@@ -804,7 +861,7 @@ function mc(trials, setup_struct, solution_forward)
                 inverse_parameters[Block(4)][1],
                 inverse_parameters[Block(6)][1],
                 reconstruction_error,
-                solution_inverse.time,
+                inverse_elapsed,
             ]
 
             # Append result to results array
@@ -877,9 +934,37 @@ end
 "Plot convergence rate, average reconstruction error, and parameter error vs noise level"
 function plotmc(results, noise_levels, game_setup)
 
+    "Compute the interquartile range of a sample. 
+    Taken from https://turreta.com/blog/2020/03/28/find-interquartile-range-in-julia/"
+    function iqr(samples)
+        samples = sort(samples)
+
+        # Get the size of the samples
+        samples_len = length(samples)
+
+        # Divide the size by 2
+        sub_samples_len = div(samples_len, 2)
+
+        # Know the indexes
+        start_index_of_q1 = 1
+        end_index_of_q1 = sub_samples_len
+        start_index_of_q3 = samples_len - sub_samples_len + 1
+        end_index_of_q3 = samples_len
+
+        # Q1 median value
+        median_value_of_q1 = median(view(samples, start_index_of_q1:end_index_of_q1))
+
+        # Q2 median value
+        median_value_of_q3 = median(view(samples, start_index_of_q3:end_index_of_q3))
+
+        # Find the IQR value
+        iqr_result = median_value_of_q3 - median_value_of_q1
+        return iqr_result
+    end
+
     # Parameters
     color_iqr = :dodgerblue
-    set_theme!()
+    Makie.set_theme!()
     text_size = 23
 
     # Create makie screens 
@@ -889,8 +974,8 @@ function plotmc(results, noise_levels, game_setup)
     trials = sum(results[:, 1] .== noise_levels[2])
 
     # Plot convergence rate  
-    fig_convergence = Figure(resolution = (800, 230), fontsize = text_size)
-    ax_convergence = Axis(
+    fig_convergence = Makie.Figure(resolution = (800, 230), fontsize = text_size)
+    ax_convergence = Makie.Axis(
         fig_convergence[1, 1],
         xlabel = "Noise standard deviation [m]",
         ylabel = "Convergence %",
@@ -912,34 +997,34 @@ function plotmc(results, noise_levels, game_setup)
     ω_iqr = [iqr(results[(results[:, 1] .== noise_level) .* idx_converged, 3]) for noise_level in noise_levels]
     ρ_iqr = [iqr(results[(results[:, 1] .== noise_level) .* idx_converged, 5]) for noise_level in noise_levels]
 
-    fig_bands = Figure(resolution = (800, 350), fontsize = text_size)
-    ax_ω = Axis(
+    fig_bands = Makie.Figure(resolution = (800, 350), fontsize = text_size)
+    ax_ω = Makie.Axis(
         fig_bands[1, 1],
         xlabel = "Noise standard deviation [m]",
         ylabel = "ω [rad/s]",
-        limits = ((noise_levels[1], noise_levels[end]), game_setup.ωs[1] > 0 ? (0, 2*game_setup.ωs[1]) : (2*game_setup.ωs[1], 0)),
+        limits = ((noise_levels[1], noise_levels[end]), game_setup.θ_truth[Block(4)][1] > 0 ? (0, 2*game_setup.θ_truth[Block(4)][1]) : (2*game_setup.θ_truth[Block(4)][1], 0)),
     )
     Makie.scatter!(ax_ω, noise_levels, ω_median, color = color_iqr)
     Makie.band!(ax_ω, noise_levels, ω_median .- ω_iqr/2, ω_median .+ ω_iqr/2, color = (color_iqr, 0.2))
-    Makie.hlines!(ax_ω, game_setup.ωs[1], color = color_iqr, linewidth = 2, linestyle = :dot)
+    Makie.hlines!(ax_ω, game_setup.θ_truth[Block(4)][1], color = color_iqr, linewidth = 2, linestyle = :dot)
     ax_ρ = Axis(
         fig_bands[1, 2],
         xlabel = "Noise standard deviation [m]",
         ylabel = "ρ [m]",
-        limits = ((noise_levels[1], noise_levels[end]), (0.5*game_setup.ρs[1], 1.5*game_setup.ρs[1])),
+        limits = ((noise_levels[1], noise_levels[end]), (0.5*game_setup.θ_truth[Block(6)][1], 1.5*game_setup.θ_truth[Block(6)][1])),
     )
     Makie.scatter!(ax_ρ, noise_levels, ρ_median, color = color_iqr)
     # Makie.band!(ax_ρ, noise_levels, clamp.(ρ_median .- ρ_iqr/2, game_setup.ρmin, Inf), ρ_median .+ ρ_iqr/2, color = (color_iqr, 0.2))
     Makie.band!(ax_ρ, noise_levels, ρ_median .- ρ_iqr/2, ρ_median .+ ρ_iqr/2, color = (color_iqr, 0.2))
-    Makie.hlines!(ax_ρ, game_setup.ρs[1], color = color_iqr, linewidth = 2, linestyle = :dot)
+    Makie.hlines!(ax_ρ, game_setup.θ_truth[Block(6)][1], color = color_iqr, linewidth = 2, linestyle = :dot)
     rowsize!(fig_bands.layout, 1, Aspect(1,0.9))
     
 
     # Plot reconstruction error
     reconstruction_error_median = [median(results[(results[:, 1] .== noise_level) .* idx_converged, 6]) for noise_level in noise_levels]
     reconstruction_error_iqr = [iqr(results[(results[:, 1] .== noise_level) .* idx_converged, 6]) for noise_level in noise_levels]
-    fig_error = Figure(resolution = (800, 250), fontsize = text_size)
-    ax_error = Axis(
+    fig_error = Makie.Figure(resolution = (800, 250), fontsize = text_size)
+    ax_error = Makie.Axis(
         fig_error[1, 1],
         xlabel = "Noise standard deviation [m]",
         ylabel = "Reconstruction error [m]",
@@ -956,58 +1041,4 @@ function plotmc(results, noise_levels, game_setup)
     save("figures/mc_noise_error.jpg", fig_error)
 
     return nothing
-end
-
-"Compute the interquartile range of a sample. 
-Taken from https://turreta.com/blog/2020/03/28/find-interquartile-range-in-julia/"
-function iqr(samples)
-    samples = sort(samples)
-
-    # Get the size of the samples
-    samples_len = length(samples)
-
-    # Divide the size by 2
-    sub_samples_len = div(samples_len, 2)
-
-    # Know the indexes
-    start_index_of_q1 = 1
-    end_index_of_q1 = sub_samples_len
-    start_index_of_q3 = samples_len - sub_samples_len + 1
-    end_index_of_q3 = samples_len
-
-    # Q1 median value
-    median_value_of_q1 = median(view(samples, start_index_of_q1:end_index_of_q1))
-
-    # Q2 median value
-    median_value_of_q3 = median(view(samples, start_index_of_q3:end_index_of_q3))
-
-    # Find the IQR value
-    iqr_result = median_value_of_q3 - median_value_of_q1
-    return iqr_result
-end
-
-"Compute trajectory reconstruction error. See Peters et al. 2021 experimental section"
-function compute_rec_error(solution_forward, solution_inverse, game_setup)
-
-    n_players = num_players(game)
-    n_states_per_player = state_dim(game.dynamics.subsystems[1])
-    horizon = size(solution_forward.x, 2)
-
-    # Position indices 
-    position_indices = vcat(
-            [[1 2] .+ (player - 1) * n_states_per_player for player in 1:(n_players)]...,
-        )
-
-    # Compute sum of norms
-    reconstruction_error = 0
-    for player in 1:n_players
-        for t in 1:horizon
-            reconstruction_error += norm(
-                solution_forward.x[position_indices[player, :], t] -
-                solution_inverse.x[position_indices[player, :], t],
-            )
-        end
-    end
-
-    1/(n_players * horizon) * reconstruction_error
 end
