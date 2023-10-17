@@ -126,12 +126,7 @@ function ParametricGame(;
         Symbolics.gradient(L, xᵢ)
     end
 
-    F = Symbolics.build_function(
-        [reduce(vcat, ∇ₓLs); reduce(vcat, gs); reduce(vcat, hs); g̃; h̃],
-        z̃, 
-        θ̃;
-        expression = Val{false}
-    )[1]
+    F_symbolic = [reduce(vcat, ∇ₓLs); reduce(vcat, gs); reduce(vcat, hs); g̃; h̃]
 
     # Set lower and upper bounds for z.
     z̲ = [
@@ -150,7 +145,14 @@ function ParametricGame(;
     ]
 
     # Build parametric MCP.
-    parametric_mcp = ParametricMCP(F, z̲, z̅, parameter_dimension)
+    parametric_mcp = ParametricMCP(
+        F_symbolic,
+        Symbolics.scalarize(z̃),
+        θ,
+        z̲,
+        z̅;
+        compute_sensitivities = true,
+    )
 
     ParametricGame(
         objectives,

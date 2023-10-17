@@ -183,49 +183,47 @@ function build_parametric_game(; game = setup_trajectory_game(), horizon = 10, N
 
     # Shared equality constraints.
     g̃ = (τ, θ) -> let
-        # (; xs, us) = unpack_trajectory(τ; game.dynamics)
-        # θ_blocked = block_parameters(θ, N, n_couples, game.dynamics)
+        (; xs, us) = unpack_trajectory(τ; game.dynamics)
+        θ_blocked = block_parameters(θ, N, n_couples, game.dynamics)
 
-        # initial_state = θ_blocked[Block(1)]
+        initial_state = θ_blocked[Block(1)]
 
-        # # Force all players to start at the given initial condition.
-        # g̃1 = xs[1] - initial_state
+        # Force all players to start at the given initial condition.
+        g̃1 = xs[1] - initial_state
 
-        # # Dynamics constraints.
-        # ts = Iterators.eachindex(xs)
-        # g̃2 = mapreduce(vcat, ts[2:end]) do t
-        #     xs[t] - game.dynamics(xs[t - 1], us[t - 1])
-        # end
+        # Dynamics constraints.
+        ts = Iterators.eachindex(xs)
+        g̃2 = mapreduce(vcat, ts[2:end]) do t
+            xs[t] - game.dynamics(xs[t - 1], us[t - 1])
+        end
 
-        # vcat(g̃1, g̃2)
-        [0.0]
+        vcat(g̃1, g̃2)
     end
 
     # Shared inequality constraints.
     h̃ =
         (τ, θ) -> let
-            # (; xs, us) = unpack_trajectory(τ; game.dynamics)
-            # θ_blocked = block_parameters(θ, N, n_couples, game.dynamics)
+            (; xs, us) = unpack_trajectory(τ; game.dynamics)
+            θ_blocked = block_parameters(θ, N, n_couples, game.dynamics)
 
-            # # Collision-avoidance constraint (hyperplanes in this case)
-            # h̃1 = game.coupling_constraints(xs, us, θ_blocked)
+            # Collision-avoidance constraint (hyperplanes in this case)
+            h̃1 = game.coupling_constraints(xs, us, θ_blocked)
 
-            # # Actuator/state limits.
-            # actuator_constraint = TrajectoryGamesBase.get_constraints_from_box_bounds(
-            #     control_bounds(game.dynamics),
-            # )
-            # h̃3 = mapreduce(vcat, us) do u
-            #     actuator_constraint(u)
-            # end
+            # Actuator/state limits.
+            actuator_constraint = TrajectoryGamesBase.get_constraints_from_box_bounds(
+                control_bounds(game.dynamics),
+            )
+            h̃3 = mapreduce(vcat, us) do u
+                actuator_constraint(u)
+            end
 
-            # state_constraint =
-            #     TrajectoryGamesBase.get_constraints_from_box_bounds(state_bounds(game.dynamics))
-            # h̃4 = mapreduce(vcat, xs) do x
-            #     state_constraint(x)
-            # end
+            state_constraint =
+                TrajectoryGamesBase.get_constraints_from_box_bounds(state_bounds(game.dynamics))
+            h̃4 = mapreduce(vcat, xs) do x
+                state_constraint(x)
+            end
 
-            # vcat(h̃1, h̃3, h̃4)
-            [0.0]
+            vcat(h̃1, h̃3, h̃4)
         end
 
     ParametricGame(;
@@ -240,17 +238,15 @@ function build_parametric_game(; game = setup_trajectory_game(), horizon = 10, N
         ],
         equality_dimensions = [1 for _ in 1:N],
         inequality_dimensions = [1 for _ in 1:N],
-        # shared_equality_dimension = state_dim(game.dynamics) +
-        #                             (horizon - 1) * state_dim(game.dynamics),
-        shared_equality_dimension = 1,
-        # shared_inequality_dimension = horizon * (
-        #     1 + # make this change with number of hyperplane constraints 
-        #     sum(isfinite.(control_bounds(game.dynamics).lb)) +
-        #     sum(isfinite.(control_bounds(game.dynamics).ub)) +
-        #     sum(isfinite.(state_bounds(game.dynamics).lb)) +
-        #     sum(isfinite.(state_bounds(game.dynamics).ub))
-        # ),
-        shared_inequality_dimension = 1
+        shared_equality_dimension = state_dim(game.dynamics) +
+                                    (horizon - 1) * state_dim(game.dynamics),
+        shared_inequality_dimension = horizon * (
+            1 + # make this change with number of hyperplane constraints 
+            sum(isfinite.(control_bounds(game.dynamics).lb)) +
+            sum(isfinite.(control_bounds(game.dynamics).ub)) +
+            sum(isfinite.(state_bounds(game.dynamics).lb)) +
+            sum(isfinite.(state_bounds(game.dynamics).ub))
+        ),
     )
 end
 

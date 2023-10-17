@@ -3,17 +3,15 @@
 - [x] ensure that timestep delta is correctly accounted for. 
 - [x] add thrust limits
 - [x] compute angle between players for more than 2 players
-- [ ] Make sure forward hyperplanes work for more than 2 players
 - [x] Remove environment constraints altogether (instead of just commenting them out)
 - [x] Add goals as a parameters
 - [x] Num of shared inequality constarints should change w/ adjacency matrix. Important when ParametricGame is built from a game definition. 
+- [x] Add differentation wrt goal state
 - [x] Add hyperplane plotting function 
-- [ ] Remove Plots.jl dependency
 - [x] Invert game (follow ParametricMCPs readme)
-- [ ] Fix stack overflows. Likely good idea to benchmark code to see where it's getting stuck? 
-- [ ] Fix stage cost so that it works with more players 
+- [x] Fix stack overflows. Likely good idea to benchmark code to see where it's getting stuck? 
+- [ ] Remove Plots.jl dependency
+- [ ] Make sure forward hyperplanes work for more than 2 players
 - [ ] Make sure that inverse game can gracefully handle case when PATH doesn't find a soln
 - [ ] Add noise to position only 
 - [ ] Figure out how to feed solutions into reconstruction error 
-- [ ] Add diferentation wrt goal state
-- [ ] Fix error with running parametric game
