@@ -531,37 +531,15 @@ function visualize_rotating_hyperplanes(states, parameters; title = "", filename
 end    
 
 "Solve the forward game"
-function forward()
-    # Game parameters
-    horizon = 44
-    dt = 5.0
-    initial_state = mortar([[-100.0, 0.0, 0.0, 0.0], [0.0, -100.0, 0.0, 0.0]])
-    goals = mortar([[100.0, 0.0], [0.0, 100.0]]) # TEMPORARY 
-    ωs = [0.015]
-    α0s = [3*pi/4]
-    ρs = [30.0]
-    couples = [(1,2)]
-    weights = mortar([[10.0, 0.0001], [10.0, 0.0001]])
-    n_players = 2
-    n_states_per_player = 4 
-    m   = 100.0 # kg
-    r₀ = (400 + 6378.137) # km
-    grav_param  = 398600.4418 # km^3/s^2
-    n = sqrt(grav_param/(r₀^3)) # rad/s   
-
-    # Parameters 
-    θ = mortar([initial_state, goals, weights, ωs, α0s, ρs])
-
-    # Set up games
-    @elapsed game = setup_trajectory_game(;horizon, dt, n, m, couples)
-    @elapsed parametric_game = build_parametric_game(; game, horizon, N = n_players, n_couples = length(couples))
+function forward(setup)
+    @unpack game, parametric_game, dt, couples, θ = setup
     
     # Simulate forward
-    turn_length = horizon 
+    turn_length = horizon(game_setup.game.dynamics) 
     receding_horizon_strategy =
-            WarmStartRecedingHorizonStrategy(; game, parametric_game, turn_length, horizon, parameters = θ)
+            WarmStartRecedingHorizonStrategy(; game, parametric_game, turn_length, horizon=turn_length, parameters = θ)
     sim_steps = let
-        n_sim_steps = horizon
+        n_sim_steps = turn_length
         progress = ProgressMeter.Progress(n_sim_steps)
         
         rollout(
@@ -577,19 +555,20 @@ function forward()
     # MCP solution
     solution = receding_horizon_strategy.last_solution
 
+    # TEMPORARY. I THINK THIS SHOULD BE SEPARATE 
     # Plot hyperplanes
     trajectory = (; x = hcat(sim_steps.xs...), u = hcat(sim_steps.us...))
     adjacency_matrix = [false true; false false] # used in plotting only
     plot_parameters = 
         (;
-            n_players,
-            n_states_per_player,
-            goals = [goals[Block(player)] for player in 1:2],
+            n_players = num_players(game),
+            n_states_per_player = state_dim(game.dynamics.subsystems[1]),
+            goals = [setup.θ[Block(2)][Block(player)] for player in 1:num_players(game)],
             adjacency_matrix, 
-            couples = findall(adjacency_matrix),
-            ωs,
+            couples,
+            ωs = setup.θ[Block(4)],
             α0s = zeros(length(couples)),
-            ρs,
+            ρs = setup.θ[Block(6)],
             ΔT = dt
         )
     visualize_rotating_hyperplanes(
@@ -602,7 +581,7 @@ function forward()
         save_frame = 25,
     )
 
-    (;solution, game, parametric_game)
+    (;solution)
 end
 
 "Loss function. Norm square of difference between observed and predicted primals"
@@ -629,15 +608,14 @@ function setup_experiment()
     # Game parameters
     horizon = 44
     dt = 5.0
-    initial_state::Vector{Float64} = mortar([[-100.0, 0.0, 0.0, 0.0], [0.0, -100.0, 0.0, 0.0]])
-    goals::Vector{Float64} = mortar([[100.0, 0.0], [0.0, 100.0]]) # TEMPORARY 
-    ωs::Vector{Float64} = [0.015]
-    α0s::Vector{Float64} = [3 * pi / 4]
-    ρs::Vector{Float64} = [30.0]
+    initial_state = mortar([[-100.0, 0.0, 0.0, 0.0], [0.0, -100.0, 0.0, 0.0]])
+    goals = mortar([[100.0, 0.0], [0.0, 100.0]]) # TEMPORARY 
+    ωs = [0.015]
+    α0s = [3 * pi / 4]
+    ρs = [30.0]
     couples = [(1, 2)]
-    weights::Vector{Float64} = mortar([[10.0, 0.0001], [10.0, 0.0001]])
+    weights = mortar([[10.0, 0.0001], [10.0, 0.0001]])
     n_players = 2
-    n_states_per_player = 4 
     m   = 100.0 # kg
     r₀ = (400 + 6378.137) # km
     grav_param  = 398600.4418 # km^3/s^2
@@ -645,7 +623,7 @@ function setup_experiment()
 
     # Parameters 
     # Initialize to avoid type instabilities
-    θ = mortar([initial_state, goals, weights, ωs, α0s, ρs])
+    θ_truth = mortar([initial_state, goals, weights, ωs, α0s, ρs])
 
     # Set up games
     game = setup_trajectory_game(;horizon, dt, n, m, couples)
@@ -660,23 +638,20 @@ function setup_experiment()
     learning_rate_ρ = 1.5e-2
     momentum_factor = 0.6  # You can adjust this value
 
-    x0_truth = initial_state
-
     # Initial parameter guess 
-    θ_guess = mortar([
+    θ = mortar([
         initial_state,
         goals,
         weights,
         [0.008], # From cited paper
         [3 * pi / 4],
-        [10.0]
+        [30.0]
     ])
 
     # ---- MONTE CARLO PARAMETERS ----
 
-
     # ---- Pack everything ----
-    (;game, parametric_game, θ, θ_guess, learning_rate_x0_pos, learning_rate_x0_vel, learning_rate_ω, learning_rate_ρ, momentum_factor, x0_truth, ωs, α0s, ρs)
+    (;game, parametric_game, dt, θ, θ_truth, couples, learning_rate_x0_pos, learning_rate_x0_vel, learning_rate_ω, learning_rate_ρ, momentum_factor)
 end
 
 "Solve the inverse game taking gradient steps"
