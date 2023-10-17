@@ -535,7 +535,7 @@ function forward(setup)
     @unpack game, parametric_game, dt, couples, θ = setup
     
     # Simulate forward
-    turn_length = horizon(game_setup.game.dynamics) 
+    turn_length = horizon(game.dynamics) 
     receding_horizon_strategy =
             WarmStartRecedingHorizonStrategy(; game, parametric_game, turn_length, horizon=turn_length, parameters = θ)
     sim_steps = let
