@@ -333,7 +333,6 @@ function (strategy::WarmStartRecedingHorizonStrategy)(state, time)
     plan_is_still_valid = 1 <= time_along_plan <= strategy.turn_length
 
     θ = strategy.parameters
-    θ[Block(1)] = state
 
     update_plan = !plan_exists || !plan_is_still_valid
     if update_plan
@@ -531,8 +530,8 @@ function visualize_rotating_hyperplanes(states, parameters; title = "", filename
 end    
 
 "Solve the forward game"
-function forward(setup)
-    @unpack game, parametric_game, dt, couples, θ = setup
+function forward(θ, game_setup)
+    @unpack game, parametric_game, dt, couples = game_setup
     
     # Simulate forward
     turn_length = horizon(game.dynamics) 
@@ -563,12 +562,12 @@ function forward(setup)
         (;
             n_players = num_players(game),
             n_states_per_player = state_dim(game.dynamics.subsystems[1]),
-            goals = [setup.θ[Block(2)][Block(player)] for player in 1:num_players(game)],
+            goals = [θ[Block(2)][Block(player)] for player in 1:num_players(game)],
             adjacency_matrix, 
             couples,
-            ωs = setup.θ[Block(4)],
+            ωs = θ[Block(4)],
             α0s = zeros(length(couples)),
-            ρs = setup.θ[Block(6)],
+            ρs = θ[Block(6)],
             ΔT = dt
         )
     visualize_rotating_hyperplanes(
@@ -606,8 +605,8 @@ function setup_experiment()
     # ---- FORWARD GAME PARAMETERS ----
 
     # Game parameters
-    horizon = 44
-    dt = 5.0
+    horizon = 22
+    dt = 10.0
     initial_state = mortar([[-100.0, 0.0, 0.0, 0.0], [0.0, -100.0, 0.0, 0.0]])
     goals = mortar([[100.0, 0.0], [0.0, 100.0]]) # TEMPORARY 
     ωs = [0.015]
@@ -621,8 +620,7 @@ function setup_experiment()
     grav_param  = 398600.4418 # km^3/s^2
     n = sqrt(grav_param/(r₀^3)) # rad/s   
 
-    # Parameters 
-    # Initialize to avoid type instabilities
+    # Ground truth parameters 
     θ_truth = mortar([initial_state, goals, weights, ωs, α0s, ρs])
 
     # Set up games
@@ -639,7 +637,7 @@ function setup_experiment()
     momentum_factor = 0.6  # You can adjust this value
 
     # Initial parameter guess 
-    θ = mortar([
+    θ_guess = mortar([
         initial_state,
         goals,
         weights,
