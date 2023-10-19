@@ -10,8 +10,12 @@
 - [x] Add hyperplane plotting function 
 - [x] Invert game (follow ParametricMCPs readme)
 - [x] Fix stack overflows. Likely good idea to benchmark code to see where it's getting stuck? 
+- [x] Figure out how to feed solutions into reconstruction error 
+- [x] Modify trajectory game that it's in terms of a setup struct. 
+- [x] Make a function for the fancy indexing that I do to extract states only. Use it to refactor reconstruction cost
 - [ ] Remove Plots.jl dependency
 - [ ] Make sure forward hyperplanes work for more than 2 players
-- [ ] Make sure that inverse game can gracefully handle case when PATH doesn't find a soln
 - [ ] Add noise to position only 
-- [ ] Figure out how to feed solutions into reconstruction error 
+- [ ] Setup game struct as an actual structure? Should still work with current use of @unpack
+- [ ] Perhaps add an initial guess to MCP solve to speed up forward game computation in monte carlo analysis. 
+- [ ] Currently considering only states in loss function. Should we consider controls observable too? 

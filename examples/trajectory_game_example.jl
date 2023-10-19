@@ -651,21 +651,12 @@ function inverse_loss(observation, θ, game, parametric_game; initial_guess = no
         return_primals = false
         )
 
-    # TODO Should this be repeated here? Perhaps make a function for the 
-    n_players = num_players(game.dynamics)
-    n_states_per_player = state_dim(game.dynamics.subsystems[1])
-    n_controls_per_player = control_dim(game.dynamics.subsystems[1])
-    T = horizon(game.dynamics)
-
     # Norm sqr of difference between predicted and observed (states only)
-    norm_sqr(
-        solution_predicted.variables[1:sum(parametric_game.primal_dimensions)][reduce(
-            vcat,
-            [
-                (1:(T * n_states_per_player)) .+
-                (n_player - 1) * T * (n_states_per_player + n_controls_per_player) for n_player in 1:n_players
-            ],
-        )] .- observation,
+    solution_predicted.status, norm_sqr(
+        extract_states(
+            solution_predicted.variables[1:sum(parametric_game.primal_dimensions)],
+            game.dynamics,
+        ) .- observation,
     )
 end
 
@@ -690,14 +681,21 @@ function inverse(observation, θ_guess, game_setup; max_grad_steps = 10, tol = 1
     ]
 
     # Print first step 
+    status_first, loss_first = inverse_loss(observation, θ_guess, game, parametric_game)
     verbose && println(@sprintf("%3d: Δx0 = %2.0f ω = %7.5f ρ = %5.2f ||∇L|| = %6.3f L = %6.3f",
         0,
         norm(θ_guess[Block(1)] - θ_truth[Block(1)]),
         θ_guess[Block(4)][1],
         θ_guess[Block(6)][1],
         NaN,
-        inverse_loss(observation, θ_guess, game, parametric_game)
+        loss_first
     ))
+    
+    # Break if first step did not converge
+    if status_first != PATHSolver.MCP_Solved
+        verbose && println( "   Stopping: First step did not converge.") 
+        return false, θ_guess
+    end
 
     # Gradient wrt hyperplane parameters only 
     grad_norms  = []
@@ -709,7 +707,7 @@ function inverse(observation, θ_guess, game_setup; max_grad_steps = 10, tol = 1
     for i in 1:max_grad_steps
 
         # Gradient 
-        grad = Zygote.gradient(θ -> inverse_loss(observation, θ, game, parametric_game), θ_guess)
+        grad = Zygote.gradient(θ -> inverse_loss(observation, θ, game, parametric_game)[2], θ_guess)
         # grad = Zygote.gradient(θ_guess) do θ_outer
         #     Zygote.forwarddiff(θ_outer;) do θ_inner
         #         inverse_loss(observation, θ_inner, game, parametric_game)
@@ -738,7 +736,13 @@ function inverse(observation, θ_guess, game_setup; max_grad_steps = 10, tol = 1
         ])
 
         # New solution 
-        loss_new = inverse_loss(observation, θ_guess, game, parametric_game)
+        status_new, loss_new = inverse_loss(observation, θ_guess, game, parametric_game)
+
+        # Break if new step did not converge
+        if status_new != PATHSolver.MCP_Solved
+            verbose && println("    Stopping: New step did not converge.") 
+            return false, θ_guess
+        end
 
         # Print
         verbose && println(@sprintf("%3d: Δx0 = %2.0f ω = %7.5f ρ = %5.2f ||p|| = %6.3f L = %6.3f",
@@ -764,8 +768,25 @@ function inverse(observation, θ_guess, game_setup; max_grad_steps = 10, tol = 1
     verbose && println("Final hyperplane parameters: ", θ_guess[Block(4)][1], " ", θ_guess[Block(6)][1]) 
 
     # Return parameters
-    return true, θ_guess # TODO Return an actual convergence variable, not just always true.
+    return true, θ_guess
 
+end
+
+"Utility to extract states from the primals of an MCP solution"
+function extract_states(primals, dynamics::ProductDynamics)
+    n_players = num_players(dynamics)
+    n_states_per_player = state_dim(dynamics.subsystems[1])
+    n_controls_per_player = control_dim(dynamics.subsystems[1])
+    T = horizon(dynamics)
+
+    primals[reduce(
+        vcat,
+        [
+            (1:(T * n_states_per_player)) .+
+            (n_player - 1) * T * (n_states_per_player + n_controls_per_player) for
+            n_player in 1:n_players
+        ],
+    ),]
 end
 
 "Run Monte Carlo simulation for a sequence of noise levels"
@@ -780,20 +801,21 @@ function mc(trials, game_setup, solution_forward; kwargs...)
     T = horizon(game.dynamics)
 
     "Compute trajectory reconstruction error. See Peters et al. 2021 experimental section"
-    function compute_rec_error(solution_forward, solution_inverse)
+    function compute_rec_error(primals_forward, primals_inverse)
+
+        states_forward = extract_states(primals_forward, game.dynamics)
+        states_inverse = extract_states(primals_inverse, game.dynamics)
 
         # Position indices 
-        position_indices = vcat(
-                [[1 2] .+ (player - 1) * n_states_per_player for player in 1:(n_players)]...,
-            )
+        position_indices = (player, t) -> (1:2) .+ (player-1)*T*n_states_per_player .+ (t-1)*n_states_per_player
 
         # Sum of norms
         reconstruction_error = 0
         for player in 1:n_players
             for t in 1:horizon(game.dynamics)
                 reconstruction_error += norm(
-                    solution_forward.x[position_indices[player, :], t] -
-                    solution_inverse.x[position_indices[player, :], t],
+                    states_forward[position_indices(player, t)] -
+                    states_inverse[position_indices(player, t)],
                 )
             end
         end
@@ -803,6 +825,7 @@ function mc(trials, game_setup, solution_forward; kwargs...)
 
     # ---- Noise levels ----
     # noise_levels = 0.0:0.1:2.5
+    # noise_levels = 20.0
     noise_levels = 0.0:2.5:20.0
 
     # ---- Monte Carlo ----
@@ -814,6 +837,7 @@ function mc(trials, game_setup, solution_forward; kwargs...)
 
     # Setup solution as a matrix
     primals_forward = solution_forward.variables[1:sum(parametric_game.primal_dimensions)]
+    states_forward = extract_states(primals_forward, game.dynamics)
 
     # Copy guess 
     θ_guess = copy(θ_guess)
@@ -822,37 +846,36 @@ function mc(trials, game_setup, solution_forward; kwargs...)
 
         for i in 1:trials
             # Extract states only and add noise
-            # TODO Add noise to positions only
             observation =
-                primals_forward[reduce(
-                    vcat,
-                    [
-                        (1:(T * n_states_per_player)) .+
-                        (n_player - 1) * T * (n_states_per_player + n_controls_per_player) for
-                        n_player in 1:n_players
-                    ],
-                )] + noise_level * randn(rng, T * n_states_per_player * n_players)
+                states_forward + noise_level * randn(rng, T * n_states_per_player * n_players)
 
             # Initialize result vector with NaN
             result = ones(Float64, 1, 6) * NaN
 
-            # Guess initial position as first observed position with zero velocity TODO make this better
-            # θ_guess[Block(1)] = BlockArray(observation[:,1], [n_states_per_player for _ in 1:n_players])
+            # Guess initial position as first observed position with zero velocity
+            x0_indices = reduce(vcat, [(1:4) .+ (player-1)*T*n_states_per_player for player in 1:n_players])
+            θ_guess[Block(1)] = BlockArray(observation[x0_indices], [n_states_per_player for player in 1:n_players])
+            vel_indices = reduce(vcat, [(3:4) .+ (player-1)*n_states_per_player for player in 1:n_players])
+            θ_guess[vel_indices] .= 0.0
 
             # Solve inverse game with guessed parameter
             converged_inverse, inverse_parameters = inverse(observation, θ_guess, game_setup; kwargs...)
 
-            # Compute trajectory for inverse game
-            inverse_elapsed = @elapsed solution_inverse = solve(
-                parametric_game,
-                inverse_parameters;
-                initial_guess = nothing, 
-                verbose = false,
-                return_primals = false
-            )
+            # Compute trajectory for inverse game only if converged 
+            if converged_inverse 
+                inverse_elapsed = @elapsed solution_inverse = solve(
+                    parametric_game,
+                    inverse_parameters;
+                    initial_guess = nothing, 
+                    verbose = false,
+                    return_primals = false
+                )
 
-            # Compute trajectory reconstruction error
-            reconstruction_error = compute_rec_error(primals_forward, solution_inverse.primals)
+                reconstruction_error = compute_rec_error(primals_forward, solution_inverse.variables[1:sum(parametric_game.primal_dimensions)])
+            else
+                inverse_elapsed = NaN
+                reconstruction_error = NaN
+            end
 
             # Assemble result matrix
             result = [
@@ -909,6 +932,8 @@ function mc(trials, game_setup, solution_forward; kwargs...)
             " time = ",
             sum(results[idx_converged, 6]) / num_converged,
         )
+
+        num_converged == 0 && @warn "No convergence for noise level ", noise_level, ". Plotting will fail."
     end 
 
     # ---- Save results ----
@@ -992,10 +1017,10 @@ function plotmc(results, noise_levels, game_setup)
 
     # Plot bands for ω
     ω_median = [median(results[(results[:, 1] .== noise_level) .* idx_converged, 3]) for noise_level in noise_levels]
-    ρ_median = [median(results[(results[:, 1] .== noise_level) .* idx_converged, 5]) for noise_level in noise_levels]
+    ρ_median = [median(results[(results[:, 1] .== noise_level) .* idx_converged, 4]) for noise_level in noise_levels]
 
     ω_iqr = [iqr(results[(results[:, 1] .== noise_level) .* idx_converged, 3]) for noise_level in noise_levels]
-    ρ_iqr = [iqr(results[(results[:, 1] .== noise_level) .* idx_converged, 5]) for noise_level in noise_levels]
+    ρ_iqr = [iqr(results[(results[:, 1] .== noise_level) .* idx_converged, 4]) for noise_level in noise_levels]
 
     fig_bands = Makie.Figure(resolution = (800, 350), fontsize = text_size)
     ax_ω = Makie.Axis(
@@ -1021,8 +1046,8 @@ function plotmc(results, noise_levels, game_setup)
     
 
     # Plot reconstruction error
-    reconstruction_error_median = [median(results[(results[:, 1] .== noise_level) .* idx_converged, 6]) for noise_level in noise_levels]
-    reconstruction_error_iqr = [iqr(results[(results[:, 1] .== noise_level) .* idx_converged, 6]) for noise_level in noise_levels]
+    reconstruction_error_median = [median(results[(results[:, 1] .== noise_level) .* idx_converged, 5]) for noise_level in noise_levels]
+    reconstruction_error_iqr = [iqr(results[(results[:, 1] .== noise_level) .* idx_converged, 5]) for noise_level in noise_levels]
     fig_error = Makie.Figure(resolution = (800, 250), fontsize = text_size)
     ax_error = Makie.Axis(
         fig_error[1, 1],
