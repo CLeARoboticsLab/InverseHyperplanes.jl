@@ -131,10 +131,17 @@ function unpack_trajectory(flat_trajectory; dynamics::ProductDynamics)
     stack_trajectories(trajs)
 end
 
-"Utility for turning z into a tuple of matrices where each column is a timestep"
-function matrix_traj(primals, dynamics::ProductDynamics)
-    primals_unpacked = unpack_trajectory(mortar(primals); dynamics)
-    (; xs = reduce(hcat, primals_unpacked.xs), us = reduce(hcat, primals_unpacked.us))
+"""
+Utility for converting vertically concatenated state trajectories (i.e. [x^1, x^2]) into a matrix of the form
+    [[x^1_1, x^2_1], ... , [x^1_T, x^2_T]]
+"""
+function states_to_matrix(states, dynamics::ProductDynamics)
+    single_traj_length = state_dim(dynamics.subsystems[1]) * horizon(dynamics) # assumes same dynamics for all players
+    trajs = mortar(
+        [states[(1:single_traj_length) .+ (i - 1) * single_traj_length] for i in 1:num_players(dynamics)],
+        [single_traj_length for i in 1:num_players(dynamics)],
+    )
+    mapreduce(τ -> reshape(τ, (state_dim(dynamics.subsystems[1]), horizon(dynamics))), vcat, blocks(trajs))
 end
 
 "Utility for packing trajectory."
@@ -385,12 +392,22 @@ function cwh_satellite_2D(; dt = 5.0, n = 0.001, m = 100.0, kwargs...)
 end
 
 "Visualize rotating hyperplanes"
-function visualize_rotating_hyperplanes(states, parameters; title = "", filename = "", koz = true, fps = 5, save_frame = nothing, noisy = false)
+function visualize_rotating_hyperplanes(
+    states,
+    parameters;
+    title = "",
+    filename = "",
+    koz = true,
+    hyperplanes = true,
+    fps = 5,
+    save_frame = nothing,
+    noisy = false,
+)
 
     # Parameters 
     text_size = 20
     text_size_ticks = 15
-    marker_size_goals = 10
+    marker_size_goals = 12
     marker_size_players = 7.5
     marker_observations = 4.0
     line_width = 4
@@ -454,17 +471,29 @@ function visualize_rotating_hyperplanes(states, parameters; title = "", filename
         )
         if noisy
             Plots.scatter!(
-                [states[position_indices[player, 1], 1:i] for player in 1:(parameters.n_players)],
-                [states[position_indices[player, 2], 1:i] for player in 1:(parameters.n_players)],
+                [states[position_indices[player, 1], 2:i] for player in 1:(parameters.n_players)],
+                [states[position_indices[player, 2], 2:i] for player in 1:(parameters.n_players)],
                 markersize = marker_observations,
+                msw = 0,
             )
         else
             Plots.plot!(
-                [states[position_indices[player, 1], 1:i] for player in 1:(parameters.n_players)],
-                [states[position_indices[player, 2], 1:i] for player in 1:(parameters.n_players)],
+                [states[position_indices[player, 1], 2:i] for player in 1:(parameters.n_players)],
+                [states[position_indices[player, 2], 2:i] for player in 1:(parameters.n_players)],
                 linewidth = line_width,
             )
         end
+
+        # Scatter transparent goals for start position 
+        Plots.scatter!(
+            [states[position_indices[player, 1], 1] for player in 1:(parameters.n_players)],
+            [states[position_indices[player, 2], 1] for player in 1:(parameters.n_players)],
+            markersize = marker_size_goals,
+            marker = :star4,
+            markercolor=:white,
+            markerstrokecolor=colors,
+        )
+
         # plot goals from parameters info with an x
         Plots.scatter!(
             [parameters.goals[player][1] for player in 1:(parameters.n_players)],
@@ -472,9 +501,10 @@ function visualize_rotating_hyperplanes(states, parameters; title = "", filename
             markersize = marker_size_goals,
             marker = :star4,
             color = colors,
+            msw = 0,
         )
 
-        # Plot KoZs
+        # Plot KoZs and hyperplanes
         for (couple_idx, couple)  in enumerate(couples)
             if koz
                 # Plot KoZs around hyperplane owner
@@ -500,14 +530,16 @@ function visualize_rotating_hyperplanes(states, parameters; title = "", filename
             #     color = colors[couple[1]],
             # )
             # Plot hyperplane 
-            hyperplane_domain = 10*range(domain[1],domain[2],100)
-            p = states[position_indices[couple[2], 1:2], i] + ni
-            Plots.plot!(hyperplane_domain .+ p[1],
-                [-ni[1]/ni[2]*x + p[2] for x in hyperplane_domain],
-                color = colors[couple[1]],
-                linewidth = line_width_hyperplanes,
-                linestyle = :dot,
-            )
+            if hyperplanes
+                hyperplane_domain = 10*range(domain[1],domain[2],100)
+                p = states[position_indices[couple[2], 1:2], i] + ni
+                Plots.plot!(hyperplane_domain .+ p[1],
+                    [-ni[1]/ni[2]*x + p[2] for x in hyperplane_domain],
+                    color = colors[couple[1]],
+                    linewidth = line_width_hyperplanes,
+                    linestyle = :dot,
+                )
+            end
         end
 
         # Plot player positions on top 
@@ -515,19 +547,26 @@ function visualize_rotating_hyperplanes(states, parameters; title = "", filename
             [states[position_indices[player, 1], i] for player in 1:(parameters.n_players)],
             [states[position_indices[player, 2], i] for player in 1:(parameters.n_players)],
             markersize = marker_size_players,
+            msw = 3,
             color = colors,
         )
 
         # Set domain
-        Plots.plot!(xlims = domain,
-              ylims = domain)
+        Plots.plot!(xlims = domain, ylims = domain)
+
+        # Annotate time at top right 
+        Plots.annotate!((
+            x_domain[2] - (x_domain[2] - x_domain[1]) / 10,
+            y_domain[2] - (y_domain[2] - y_domain[1]) / 30,
+            (string("t = ", trunc(Int, i * parameters.ΔT), "s"), text_size),
+        ))
 
         # Save if at saveframe
         if !isnothing(save_frame) && i == save_frame
-            Plots.savefig("figures/hyperplanes_frame_"*filename*".png")
+            Plots.savefig("figures/"*filename*"_frame.png")
         end
     end
-    Plots.gif(anim, fps = fps, "figures/hyperplanes_"*filename*".gif")
+    Plots.gif(anim, fps = fps, "figures/"*filename*".gif")
 end    
 
 "Solve the forward game"
@@ -826,7 +865,7 @@ function mc(trials, game_setup, solution_forward; kwargs...)
     # ---- Noise levels ----
     # noise_levels = 0.0:0.1:2.5
     # noise_levels = 20.0
-    noise_levels = 0.0:2.5:20.0
+    noise_levels = 0.0:1.0:20.0
 
     # ---- Monte Carlo ----
     println("Starting Monte Carlo for ", length(noise_levels), " noise levels and ", trials, " trials each.")
@@ -1025,7 +1064,7 @@ function plotmc(results, noise_levels, game_setup)
     fig_bands = Makie.Figure(resolution = (800, 350), fontsize = text_size)
     ax_ω = Makie.Axis(
         fig_bands[1, 1],
-        xlabel = "Noise standard deviation [m]",
+        xlabel = "Noise standard deviation",
         ylabel = "ω [rad/s]",
         limits = ((noise_levels[1], noise_levels[end]), game_setup.θ_truth[Block(4)][1] > 0 ? (0, 2*game_setup.θ_truth[Block(4)][1]) : (2*game_setup.θ_truth[Block(4)][1], 0)),
     )
@@ -1034,7 +1073,7 @@ function plotmc(results, noise_levels, game_setup)
     Makie.hlines!(ax_ω, game_setup.θ_truth[Block(4)][1], color = color_iqr, linewidth = 2, linestyle = :dot)
     ax_ρ = Axis(
         fig_bands[1, 2],
-        xlabel = "Noise standard deviation [m]",
+        xlabel = "Noise standard deviation",
         ylabel = "ρ [m]",
         limits = ((noise_levels[1], noise_levels[end]), (0.5*game_setup.θ_truth[Block(6)][1], 1.5*game_setup.θ_truth[Block(6)][1])),
     )
