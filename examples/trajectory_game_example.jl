@@ -147,8 +147,8 @@ function pack_trajectory(traj)
 end
 
 "Utility for blocking parameter vector"
-function block_parameters(θ, N, n_couples, dynamics)
-    θ_block  = BlockArray(θ, [N .* state_dim(dynamics.subsystems[1]), N .* 2, N .* 2, n_couples, n_couples, n_couples])
+function block_parameters(θ, n_players, n_couples, dynamics)
+    θ_block  = BlockArray(θ, [n_players .* state_dim(dynamics.subsystems[1]), n_players .* 2, n_players .* 2, n_couples, n_couples, n_couples])
 
     mortar([
         θ_block[Block(1)],
@@ -161,7 +161,7 @@ function block_parameters(θ, N, n_couples, dynamics)
 end
 
 "Convert a TrajectoryGame to a ParametricGame."
-function build_parametric_game(; game = setup_trajectory_game(), horizon = 10, N = 2, n_couples)
+function build_parametric_game(; game = setup_trajectory_game(), horizon = 10, n_players, n_couples)
 
     # Construct costs.
     function player_cost(τ, θ, player_index)
@@ -172,21 +172,21 @@ function build_parametric_game(; game = setup_trajectory_game(), horizon = 10, N
         end |> game.cost.reducer
     end
 
-    # fs = [(τ, θ) -> player_cost(τ, θ, ii) for ii in 1:N]
+    # fs = [(τ, θ) -> player_cost(τ, θ, ii) for ii in 1:n_players]
     fs = [(τ, θ) -> begin
-        θ_blocked = block_parameters(θ, N, n_couples, game.dynamics)
+        θ_blocked = block_parameters(θ, n_players, n_couples, game.dynamics)
         player_cost(τ, θ_blocked, ii)
-        end for ii in 1:N]
-    # fs = [(τ, θ) -> [0] for ii in 1:N]
+        end for ii in 1:n_players]
+    # fs = [(τ, θ) -> [0] for ii in 1:n_players]
         
     # Dummy individual constraints.
-    gs = [(τ, θ) -> [0] for _ in 1:N]
-    hs = [(τ, θ) -> [0] for _ in 1:N]
+    gs = [(τ, θ) -> [0] for _ in 1:n_players]
+    hs = [(τ, θ) -> [0] for _ in 1:n_players]
 
     # Shared equality constraints.
     g̃ = (τ, θ) -> let
         (; xs, us) = unpack_trajectory(τ; game.dynamics)
-        θ_blocked = block_parameters(θ, N, n_couples, game.dynamics)
+        θ_blocked = block_parameters(θ, n_players, n_couples, game.dynamics)
 
         initial_state = θ_blocked[Block(1)]
 
@@ -206,7 +206,7 @@ function build_parametric_game(; game = setup_trajectory_game(), horizon = 10, N
     h̃ =
         (τ, θ) -> let
             (; xs, us) = unpack_trajectory(τ; game.dynamics)
-            θ_blocked = block_parameters(θ, N, n_couples, game.dynamics)
+            θ_blocked = block_parameters(θ, n_players, n_couples, game.dynamics)
 
             # Collision-avoidance constraint (hyperplanes in this case)
             h̃1 = game.coupling_constraints(xs, us, θ_blocked)
@@ -234,12 +234,12 @@ function build_parametric_game(; game = setup_trajectory_game(), horizon = 10, N
         inequality_constraints = hs,
         shared_equality_constraint = g̃,
         shared_inequality_constraint = h̃,
-        parameter_dimension = state_dim(game.dynamics) + N * (2 + 2) + 3 * n_couples,
+        parameter_dimension = state_dim(game.dynamics) + n_players * (2 + 2) + 3 * n_couples,
         primal_dimensions = [
-            horizon * (state_dim(game.dynamics, ii) + control_dim(game.dynamics, ii)) for ii in 1:N
+            horizon * (state_dim(game.dynamics, ii) + control_dim(game.dynamics, ii)) for ii in 1:n_players
         ],
-        equality_dimensions = [1 for _ in 1:N],
-        inequality_dimensions = [1 for _ in 1:N],
+        equality_dimensions = [1 for _ in 1:n_players],
+        inequality_dimensions = [1 for _ in 1:n_players],
         shared_equality_dimension = state_dim(game.dynamics) +
                                     (horizon - 1) * state_dim(game.dynamics),
         shared_inequality_dimension = horizon * (
@@ -648,7 +648,7 @@ function setup_experiment()
 
     # Set up games
     game = setup_trajectory_game(;n_players, horizon, dt, n, m, couples)
-    parametric_game = build_parametric_game(; game, horizon, N = n_players, n_couples = length(couples))
+    parametric_game = build_parametric_game(; game, horizon, n_players = n_players, n_couples = length(couples))
 
     # ---- INVERSE GAME PARAMETERS ----
 
