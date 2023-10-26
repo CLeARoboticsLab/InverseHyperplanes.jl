@@ -151,12 +151,12 @@ function block_parameters(θ, n_players, n_couples, dynamics)
     θ_block  = BlockArray(θ, [n_players .* state_dim(dynamics.subsystems[1]), n_players .* 2, n_players .* 2, n_couples, n_couples, n_couples])
 
     mortar([
-        θ_block[Block(1)],
-        BlockArray(θ_block[Block(2)], [2, 2]),
-        BlockArray(θ_block[Block(3)], [2, 2]),
-        θ_block[Block(4)],
-        θ_block[Block(5)],
-        θ_block[Block(6)],
+        θ_block[Block(1)], # initial position 
+        BlockArray(θ_block[Block(2)], [2 for _ in 1:n_players]), # Goal positions
+        BlockArray(θ_block[Block(3)], [2 for _ in 1:n_players]), # Cost weights 
+        θ_block[Block(4)], # ω
+        θ_block[Block(5)], # α0
+        θ_block[Block(6)], # ρ
     ])
 end
 
@@ -172,12 +172,10 @@ function build_parametric_game(; game = setup_trajectory_game(), horizon = 10, n
         end |> game.cost.reducer
     end
 
-    # fs = [(τ, θ) -> player_cost(τ, θ, ii) for ii in 1:n_players]
     fs = [(τ, θ) -> begin
         θ_blocked = block_parameters(θ, n_players, n_couples, game.dynamics)
         player_cost(τ, θ_blocked, ii)
         end for ii in 1:n_players]
-    # fs = [(τ, θ) -> [0] for ii in 1:n_players]
         
     # Dummy individual constraints.
     gs = [(τ, θ) -> [0] for _ in 1:n_players]
@@ -243,7 +241,7 @@ function build_parametric_game(; game = setup_trajectory_game(), horizon = 10, n
         shared_equality_dimension = state_dim(game.dynamics) +
                                     (horizon - 1) * state_dim(game.dynamics),
         shared_inequality_dimension = horizon * (
-            1 + # make this change with number of hyperplane constraints 
+            n_couples + # make this change with number of hyperplane constraints 
             sum(isfinite.(control_bounds(game.dynamics).lb)) +
             sum(isfinite.(control_bounds(game.dynamics).ub)) +
             sum(isfinite.(state_bounds(game.dynamics).lb)) +
@@ -564,7 +562,7 @@ function visualize_rotating_hyperplanes(
 end    
 
 "Solve the forward game"
-function forward(θ, game_setup)
+function forward(θ, game_setup; visualize = false)
     @unpack game, parametric_game, dt, couples = game_setup
     
     # Simulate forward
@@ -588,31 +586,37 @@ function forward(θ, game_setup)
     # MCP solution
     solution = receding_horizon_strategy.last_solution
 
-    # TEMPORARY. I THINK THIS SHOULD BE SEPARATE 
     # Plot hyperplanes
-    trajectory = (; x = hcat(sim_steps.xs...), u = hcat(sim_steps.us...))
-    adjacency_matrix = [false true; false false] # used in plotting only
-    plot_parameters = 
-        (;
-            n_players = num_players(game),
-            n_states_per_player = state_dim(game.dynamics.subsystems[1]),
-            goals = [θ[Block(2)][Block(player)] for player in 1:num_players(game)],
-            adjacency_matrix, 
-            couples,
-            ωs = θ[Block(4)],
-            α0s = zeros(length(couples)),
-            ρs = θ[Block(6)],
-            ΔT = dt
+    if visualize
+        trajectory = (; x = hcat(sim_steps.xs...), u = hcat(sim_steps.us...))
+        # adjacency_matrix = [false true; false false] # used in plotting only
+        n_players = num_players(game)
+        adjacency_matrix = zeros(Bool, (n_players, n_players))
+        for couple in couples
+            adjacency_matrix[couple[1], couple[2]] = true
+        end
+        plot_parameters = 
+            (;
+                n_players = num_players(game),
+                n_states_per_player = state_dim(game.dynamics.subsystems[1]),
+                goals = [θ[Block(2)][Block(player)] for player in 1:num_players(game)],
+                adjacency_matrix, 
+                couples,
+                ωs = θ[Block(4)],
+                α0s = zeros(length(couples)),
+                ρs = θ[Block(6)],
+                ΔT = dt
+            )
+        visualize_rotating_hyperplanes(
+            trajectory.x,
+            plot_parameters;
+            # title = string(n_players)*"p",
+            koz = true,
+            fps = 10.0,
+            filename = "forward",
+            save_frame = 25,
         )
-    visualize_rotating_hyperplanes(
-        trajectory.x,
-        plot_parameters;
-        # title = string(n_players)*"p",
-        koz = true,
-        fps = 10.0,
-        filename = "forward",
-        save_frame = 25,
-    )
+    end
 
     solution
 end
@@ -630,13 +634,13 @@ function setup_experiment()
     horizon = 22
     dt = 10.0
     scale = 100.0
-    n_players = 2
+    n_players = 3
     initial_state = mortar([vcat(-scale .* unitvector(pi/n_players*(i-1)), [0.0,0.0]) for i in 1:n_players])
     goals = mortar([scale .* unitvector(pi/n_players*(i-1)) for i in 1:n_players])
-    couples = [(1, 2)]
-    ωs = [0.015]
+    couples = [(1, 2), (1, 3), (2, 3)]
+    ωs = [0.015 for _ in couples]
     α0s = [atan(initial_state[Block(couple[1])][2] - initial_state[Block(couple[2])][2],initial_state[Block(couple[1])][1] - initial_state[Block(couple[2])][1]) for couple in couples]
-    ρs = [30.0]
+    ρs = [30.0 for _ in couples]
     weights = mortar([[10.0, 0.0001] for _ in 1:n_players])
     m   = 100.0 # kg
     r₀ = (400 + 6378.137) # km
@@ -648,7 +652,7 @@ function setup_experiment()
 
     # Set up games
     game = setup_trajectory_game(;n_players, horizon, dt, n, m, couples)
-    parametric_game = build_parametric_game(; game, horizon, n_players = n_players, n_couples = length(couples))
+    parametric_game = build_parametric_game(; game, horizon, n_players, n_couples = length(couples))
 
     # ---- INVERSE GAME PARAMETERS ----
 
