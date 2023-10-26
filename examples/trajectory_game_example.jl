@@ -626,19 +626,24 @@ end
 "Setup parameteres for the forward game, inverse game, and the MC analysis parameters"
 function setup_experiment()
 
+    function unitvector(θ)
+        [cos(θ), sin(θ)]
+    end
+
     # ---- FORWARD GAME PARAMETERS ----
 
     # Game parameters
     horizon = 22
     dt = 10.0
-    initial_state = mortar([[-100.0, 0.0, 0.0, 0.0], [0.0, -100.0, 0.0, 0.0]])
-    goals = mortar([[100.0, 0.0], [0.0, 100.0]]) # TEMPORARY 
-    ωs = [0.015]
-    α0s = [3 * pi / 4]
-    ρs = [30.0]
-    couples = [(1, 2)]
-    weights = mortar([[10.0, 0.0001], [10.0, 0.0001]])
+    scale = 100.0
     n_players = 2
+    initial_state = mortar([vcat(-scale .* unitvector(pi/n_players*(i-1)), [0.0,0.0]) for i in 1:n_players])
+    goals = mortar([scale .* unitvector(pi/n_players*(i-1)) for i in 1:n_players])
+    couples = [(1, 2)]
+    ωs = [0.015]
+    α0s = [atan(initial_state[Block(couple[1])][2] - initial_state[Block(couple[2])][2],initial_state[Block(couple[1])][1] - initial_state[Block(couple[2])][1]) for couple in couples]
+    ρs = [30.0]
+    weights = mortar([[10.0, 0.0001] for _ in 1:n_players])
     m   = 100.0 # kg
     r₀ = (400 + 6378.137) # km
     grav_param  = 398600.4418 # km^3/s^2
@@ -648,7 +653,7 @@ function setup_experiment()
     θ_truth = mortar([initial_state, goals, weights, ωs, α0s, ρs])
 
     # Set up games
-    game = setup_trajectory_game(;horizon, dt, n, m, couples)
+    game = setup_trajectory_game(;n_players, horizon, dt, n, m, couples)
     parametric_game = build_parametric_game(; game, horizon, N = n_players, n_couples = length(couples))
 
     # ---- INVERSE GAME PARAMETERS ----
@@ -666,9 +671,9 @@ function setup_experiment()
         initial_state,
         goals,
         weights,
-        [0.008], # From cited paper
-        [3 * pi / 4],
-        [10.0]
+        [0.008 for _ in 1:length(couples)], # From cited paper
+        α0s,
+        [10.0 for _ in 1:length(couples)]
     ])
     
     # ---- MONTE CARLO PARAMETERS ----
