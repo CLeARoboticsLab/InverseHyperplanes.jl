@@ -54,16 +54,17 @@ function setup_trajectory_game(; n_players = 2, horizon = ∞, dt = 5.0, n = 0.0
 
     cost = let
         function stage_cost(x, u, t, θ)
-            x1, x2 = blocks(x)
-            u1, u2 = blocks(u)
+            # x1, x2 = blocks(x)
+            # u1, u2 = blocks(u)
             goals =   θ[Block(2)]
             weights = θ[Block(3)]
 
-            # Both players want to minimize distance to goal state whil minimizing control effort. 
-            [
-                weights[Block(1)][1] * norm_sqr(x1[1:2] - goals[Block(1)]) + weights[Block(1)][2] * norm_sqr(u1),
-                weights[Block(2)][1] * norm_sqr(x2[1:2] - goals[Block(2)]) + weights[Block(2)][2] * norm_sqr(u2),
-            ]
+            # # Both players want to minimize distance to goal state whil minimizing control effort. 
+            # [
+            #     weights[Block(1)][1] * norm_sqr(x1[1:2] - goals[Block(1)]) + weights[Block(1)][2] * norm_sqr(u1),
+            #     weights[Block(2)][1] * norm_sqr(x2[1:2] - goals[Block(2)]) + weights[Block(2)][2] * norm_sqr(u2),
+            # ]
+            [weights[Block(player)][1] * norm_sqr(x[Block(player)][1:2] - goals[Block(player)]) + weights[Block(player)][2] * norm_sqr(u[Block(player)]) for player in 1:n_players]
         end
 
         function reducer(stage_costs)
