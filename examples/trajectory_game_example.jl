@@ -73,30 +73,26 @@ function setup_trajectory_game(; n_players = 2, horizon = ∞, dt = 5.0, n = 0.0
         ρs  = θ[Block(6)]
 
         # Hyperplane constraints
-        constraints = [
-            vcat(
-                map(
-                    (tup) -> begin
-                        (ii, x) = tup
-                        x_ego = x[Block(couple[1])]
-                        x_other = x[Block(couple[2])]
+        [
+            begin
+                # Player positions
+                x_ego = x[Block(couple[1])]
+                x_other = x[Block(couple[2])]
 
-                        # Hyperplane normal 
-                        n_arg = α0s[couple_idx] + ωs[couple_idx] * (ii - 1) * dt
-                        n = [cos(n_arg), sin(n_arg)]
+                # Hyperplane normal 
+                n_arg = α0s[couple_idx] + ωs[couple_idx] * (ii - 1) * dt
+                n = [cos(n_arg), sin(n_arg)]
 
-                        # Intersection of hyperplane w/ KoZ
-                        p = x_other[1:2] + ρs[couple_idx] * n
+                # Intersection of hyperplane w/ KoZ
+                p = x_other[1:2] + ρs[couple_idx] * n
 
-                        # Hyperplane constraint
-                        n' * (x_ego[1:2] - p)
-                    end,
-                    enumerate(xs),
-                ),
-            ) for (couple_idx, couple) in enumerate(couples)
+                # Print value of couple_idx and ii 
+                println("couple_idx = ", couple_idx, ", ii = ", ii)
+
+                # Hyperplane constraint at time ii for couple couple_idx
+                n' * (x_ego[1:2] - p)
+            end for (couple_idx, couple) in enumerate(couples) for (ii, x) in enumerate(xs)
         ]
-        
-        vcat(constraints...)  
     end
 
     agent_dynamics = cwh_satellite_2D(;
@@ -638,6 +634,7 @@ function setup_experiment()
     initial_state = mortar([vcat(-scale .* unitvector(pi/n_players*(i-1)), [0.0,0.0]) for i in 1:n_players])
     goals = mortar([scale .* unitvector(pi/n_players*(i-1)) for i in 1:n_players])
     couples = [(1, 2), (1, 3), (2, 3)]
+    # couples = [(1, 2)]
     ωs = [0.015 for _ in couples]
     α0s = [atan(initial_state[Block(couple[1])][2] - initial_state[Block(couple[2])][2],initial_state[Block(couple[1])][1] - initial_state[Block(couple[2])][1]) for couple in couples]
     ρs = [30.0 for _ in couples]
@@ -693,20 +690,36 @@ function inverse_loss(observation, θ, game, parametric_game; initial_guess = no
         return_primals = false
         )
 
-    # Norm sqr of difference between predicted and observed (states only)
-    solution_predicted.status, norm_sqr(
+    loss = norm_sqr(
         extract_states(
             solution_predicted.variables[1:sum(parametric_game.primal_dimensions)],
             game.dynamics,
         ) .- observation,
     )
+
+    # Norm sqr of difference between predicted and observed (states only)
+    solution_predicted.status,
+    loss
 end
 
-"Solve the inverse game taking gradient steps"
+"""
+Solve the inverse game taking gradient steps
+
+Observation is a vector of concatenated states for all players i.e. [x^1, ... , x^n_players]
+"""
 function inverse(observation, θ_guess, game_setup; max_grad_steps = 10, tol = 1e-1, verbose = false)
 
     @unpack game, parametric_game, θ_truth, learning_parameters = game_setup
     @unpack learning_rate_x0_pos, learning_rate_x0_vel, learning_rate_ω, learning_rate_ρ, momentum_factor = learning_parameters
+
+    # TEMPORARY 
+    learning_rate_x0_pos = 5.0e-3
+    learning_rate_x0_vel = 1e-6
+    learning_rate_ω = 1e-9
+    learning_rate_ρ = 1.5e-2
+    momentum_factor = 0.8
+    # θ_guess = copy(game_setup.θ_truth)
+    # θ_guess[Block(6)][1] = 10.0
 
     # State indices
     n_players = num_players(game.dynamics)
@@ -724,15 +737,28 @@ function inverse(observation, θ_guess, game_setup; max_grad_steps = 10, tol = 1
 
     # Print first step 
     status_first, loss_first = inverse_loss(observation, θ_guess, game, parametric_game)
-    verbose && println(@sprintf("%3d: Δx0 = %2.0f ω = %7.5f ρ = %5.2f ||∇L|| = %6.3f L = %6.3f",
-        0,
+    # verbose && println(@sprintf("%3d: Δx0 = %2.0f ω = %7.5f ρ = %5.2f ||∇L|| = %6.3f L = %6.3f",
+    #     0,
+    #     norm(θ_guess[Block(1)] - θ_truth[Block(1)]),
+    #     θ_guess[Block(4)][1],
+    #     θ_guess[Block(6)][1],
+    #     NaN,
+    #     loss_first
+    # ))
+
+    # Print hyperplane parameters horizontally
+    verbose && println(
+        "0: ",
+        "Δx0: ",
         norm(θ_guess[Block(1)] - θ_truth[Block(1)]),
-        θ_guess[Block(4)][1],
-        θ_guess[Block(6)][1],
-        NaN,
-        loss_first
-    ))
-    
+        ", ωs: ",
+        trunc.(θ_guess[Block(4)], digits = 3),
+        ", ρs: ",
+        trunc.(θ_guess[Block(6)], digits = 3),
+        " L:  ",
+        loss_first,
+    )
+
     # Break if first step did not converge
     if status_first != PATHSolver.MCP_Solved
         verbose && println( "   Stopping: First step did not converge.") 
@@ -741,6 +767,7 @@ function inverse(observation, θ_guess, game_setup; max_grad_steps = 10, tol = 1
 
     # Gradient wrt hyperplane parameters only 
     grad_norms  = []
+    losses = []
     momentum_x0_pos = zero(θ_guess[Block(1)][indices_position])
     momentum_x0_vel = zero(θ_guess[Block(1)][indices_velocity])
     momentum_ω = zero(θ_guess[Block(4)])
@@ -749,12 +776,7 @@ function inverse(observation, θ_guess, game_setup; max_grad_steps = 10, tol = 1
     for i in 1:max_grad_steps
 
         # Gradient 
-        grad = Zygote.gradient(θ -> inverse_loss(observation, θ, game, parametric_game)[2], θ_guess)
-        # grad = Zygote.gradient(θ_guess) do θ_outer
-        #     Zygote.forwarddiff(θ_outer;) do θ_inner
-        #         inverse_loss(observation, θ_inner, game, parametric_game)
-        #     end
-        # end        
+        grad = Zygote.gradient(θ -> inverse_loss(observation, θ, game, parametric_game)[2], θ_guess)      
         grad_block = BlockArray(grad[1], blocksizes(θ_guess)[1])
 
         # Update momentum
@@ -777,12 +799,20 @@ function inverse(observation, θ_guess, game_setup; max_grad_steps = 10, tol = 1
             learning_rate_ρ * momentum_ρ,
         ])
 
+        # println(trunc.(abs.(grad_block[Block(4)])./maximum(abs.(grad_block[Block(4)])), digits = 3), " ",trunc(norm(grad_block[Block(4)]), digits = 2))
+
         # New solution 
         status_new, loss_new = inverse_loss(observation, θ_guess, game, parametric_game)
 
         # Break if new step did not converge
         if status_new != PATHSolver.MCP_Solved
             verbose && println("    Stopping: New step did not converge.") 
+            return false, θ_guess
+        end
+
+        # Break if any of the radii is negative 
+        if any(θ_guess[Block(6)] .< 0)
+            verbose && println("    Stopping: Negative radius.") 
             return false, θ_guess
         end
 
@@ -796,7 +826,21 @@ function inverse(observation, θ_guess, game_setup; max_grad_steps = 10, tol = 1
             momentum_norm,
             loss_new,
         ))
+        # verbose && println(
+        #     i,
+        #     ": Δx0:",
+        #     trunc(norm(θ_guess[Block(1)] - θ_truth[Block(1)]), digits = 2),
+        #     ": ωs: ",
+        #     trunc.(θ_guess[Block(4)], digits = 3),
+        #     ", ρs: ",
+        #     trunc.(θ_guess[Block(6)], digits = 3),
+        #     ", ∇L: ",
+        #     trunc.(norm([grad_block[Block(4)], grad_block[Block(6)]]), digits = 3),
+        #     ", L: ",
+        #     loss_new,
+        # )
         push!(grad_norms, norm([grad_block[Block(4)], grad_block[Block(6)]]))
+        push!(losses, loss_new)
 
         # Break if momentum norm is small enough
         if momentum_norm < tol
@@ -807,7 +851,14 @@ function inverse(observation, θ_guess, game_setup; max_grad_steps = 10, tol = 1
     end
 
     # Print final guess
-    verbose && println("Final hyperplane parameters: ", θ_guess[Block(4)][1], " ", θ_guess[Block(6)][1]) 
+    # verbose && println("Final hyperplane parameters: ", θ_guess[Block(4)][1], " ", θ_guess[Block(6)][1]) 
+    verbose && println("Final hyperplane parameters: ", θ_guess[Block(4)])
+
+    # Plot losses and gradient norm 
+    fig1 = Plots.plot(1:length(losses), losses, label = "loss", yaxis=:log)
+    fig2 = Plots.plot(1:length(grad_norms), grad_norms, label = "gradient norm", yaxis=:log)
+    Plots.display(fig1)
+    Plots.display(fig2)
 
     # Return parameters
     return true, θ_guess
