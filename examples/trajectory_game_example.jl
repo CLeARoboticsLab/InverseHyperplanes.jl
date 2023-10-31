@@ -87,7 +87,7 @@ function setup_trajectory_game(; n_players = 2, horizon = ∞, dt = 5.0, n = 0.0
                 p = x_other[1:2] + ρs[couple_idx] * n
 
                 # Print value of couple_idx and ii 
-                println("couple_idx = ", couple_idx, ", ii = ", ii)
+                # println("couple_idx = ", couple_idx, ", ii = ", ii)
 
                 # Hyperplane constraint at time ii for couple couple_idx
                 n' * (x_ego[1:2] - p)
