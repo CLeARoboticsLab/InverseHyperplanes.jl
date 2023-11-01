@@ -13,9 +13,10 @@
 - [x] Figure out how to feed solutions into reconstruction error 
 - [x] Modify trajectory game that it's in terms of a setup struct. 
 - [x] Make a function for the fancy indexing that I do to extract states only. Use it to refactor reconstruction cost
+- [x] ! Setup primals into plotting pipeline so I can re-do the figures in the paper. 
 - [ ] Remove Plots.jl dependency
-- [ ] Make sure forward hyperplanes work for more than 2 players
-- [ ] Add noise to position only 
+- [x] Make sure forward hyperplanes work for more than 2 players
 - [ ] Setup game struct as an actual structure? Should still work with current use of @unpack
-- [ ] Perhaps add an initial guess to MCP solve to speed up forward game computation in monte carlo analysis. 
-- [ ] Currently considering only states in loss function. Should we consider controls observable too? 
+- [ ] Make all hyperplanes rotation rates the same. 
+- [ ] Setup 3-D demo. 
+- [x] Warm-start using estimate of previous timestep, as in Xinjie's paper. 

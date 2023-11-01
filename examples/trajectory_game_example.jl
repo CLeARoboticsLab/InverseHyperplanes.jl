@@ -48,6 +48,7 @@ using Random: MersenneTwister
 using DataFrames
 using CSV 
 using Statistics: median
+using Optimisers
 
 "Utility to set up a trajectory game with rotating hyperplane constraints"
 function setup_trajectory_game(; n_players = 2, horizon = ∞, dt = 5.0, n = 0.001, m = 100.0, couples = nothing)
@@ -698,9 +699,32 @@ function inverse_loss(observation, θ, game, parametric_game; initial_guess = no
     )
 
     # Norm sqr of difference between predicted and observed (states only)
+    solution_predicted.variables,
     solution_predicted.status,
     loss
 end
+
+"Compose θ_guess from models"
+function compose_from_models(models, θ_guess)
+    block_dict = Dict(
+        :x0 => Block(1),
+        :goals => Block(2),
+        :weights => Block(3),
+        :ω => Block(4),
+        :α0 => Block(5),
+        :ρ => Block(6),
+    )
+
+    # Extract parameters from model
+    for model in models
+        for (key, value) in pairs(model)
+            θ_guess[block_dict[key]] = value
+        end
+    end
+
+    θ_guess
+end
+
 
 """
 Solve the inverse game taking gradient steps
@@ -712,39 +736,16 @@ function inverse(observation, θ_guess, game_setup; max_grad_steps = 10, tol = 1
     @unpack game, parametric_game, θ_truth, learning_parameters = game_setup
     @unpack learning_rate_x0_pos, learning_rate_x0_vel, learning_rate_ω, learning_rate_ρ, momentum_factor = learning_parameters
 
-    # TEMPORARY 
-    learning_rate_x0_pos = 5.0e-3
-    learning_rate_x0_vel = 1e-6
-    learning_rate_ω = 1e-9
-    learning_rate_ρ = 1.5e-2
-    momentum_factor = 0.8
-    # θ_guess = copy(game_setup.θ_truth)
-    # θ_guess[Block(6)][1] = 10.0
+    # Setup optimiser
+    model_ω = (ω = copy(θ_guess[Block(4)]),)
+    model_ρ = (ρ = copy(θ_guess[Block(6)]),)
 
-    # State indices
-    n_players = num_players(game.dynamics)
-    n_states_per_player = state_dim(game.dynamics.subsystems[1])
-    base_indices_position = [1, 2]
-    base_indices_velocity = [3, 4]
-    indices_position = [
-        (index .+ (player - 1) * n_states_per_player) for player in 1:n_players for
-        index in base_indices_position
-    ]
-    indices_velocity = [
-        (index .+ (player - 1) * n_states_per_player) for player in 1:n_players for
-        index in base_indices_velocity
-    ]
+    # Setup chain 
+    state_tree_ω = Optimisers.setup(Optimisers.Adam(0.001, (0.8, 0.999)), model_ω)
+    state_tree_ρ = Optimisers.setup(Optimisers.Adam(3.0, (0.8, 0.999)), model_ρ)
 
     # Print first step 
-    status_first, loss_first = inverse_loss(observation, θ_guess, game, parametric_game)
-    # verbose && println(@sprintf("%3d: Δx0 = %2.0f ω = %7.5f ρ = %5.2f ||∇L|| = %6.3f L = %6.3f",
-    #     0,
-    #     norm(θ_guess[Block(1)] - θ_truth[Block(1)]),
-    #     θ_guess[Block(4)][1],
-    #     θ_guess[Block(6)][1],
-    #     NaN,
-    #     loss_first
-    # ))
+    z_new, status_first, loss_first = inverse_loss(observation, θ_guess, game, parametric_game)
 
     # Print hyperplane parameters horizontally
     verbose && println(
@@ -768,41 +769,20 @@ function inverse(observation, θ_guess, game_setup; max_grad_steps = 10, tol = 1
     # Gradient wrt hyperplane parameters only 
     grad_norms  = []
     losses = []
-    momentum_x0_pos = zero(θ_guess[Block(1)][indices_position])
-    momentum_x0_vel = zero(θ_guess[Block(1)][indices_velocity])
-    momentum_ω = zero(θ_guess[Block(4)])
-    momentum_ρ = zero(θ_guess[Block(6)])
     θ_guess = copy(θ_guess)
     for i in 1:max_grad_steps
 
         # Gradient 
-        grad = Zygote.gradient(θ -> inverse_loss(observation, θ, game, parametric_game)[2], θ_guess)      
+        grad = Zygote.gradient(θ -> inverse_loss(observation, θ, game, parametric_game; initial_guess = z_new)[3], compose_from_models([model_ω, model_ρ], θ_guess))         
         grad_block = BlockArray(grad[1], blocksizes(θ_guess)[1])
+        grad_norm = norm([grad_block[Block(4)], grad_block[Block(6)]])
 
-        # Update momentum
-        momentum_x0_pos = momentum_factor * momentum_x0_pos + (1 - momentum_factor) * grad_block[Block(1)][indices_position]
-        momentum_x0_vel = momentum_factor * momentum_x0_vel + (1 - momentum_factor) * grad_block[Block(1)][indices_velocity]
-        momentum_ω = momentum_factor * momentum_ω + (1 - momentum_factor) * grad_block[Block(4)]
-        momentum_ρ = momentum_factor * momentum_ρ + (1 - momentum_factor) * grad_block[Block(6)]
-
-        # Update guesses
-        θ_guess[Block(1)][indices_position] -= learning_rate_x0_pos * momentum_x0_pos
-        θ_guess[Block(1)][indices_velocity] -= learning_rate_x0_vel * momentum_x0_vel
-        θ_guess[Block(4)] -= learning_rate_ω * momentum_ω
-        θ_guess[Block(6)] -= learning_rate_ρ * momentum_ρ     
-        
-        # Calculate norm of momenta with learning rate
-        momentum_norm = norm([
-            learning_rate_x0_pos * momentum_x0_pos,
-            learning_rate_x0_vel * momentum_x0_vel,
-            learning_rate_ω * momentum_ω,
-            learning_rate_ρ * momentum_ρ,
-        ])
-
-        # println(trunc.(abs.(grad_block[Block(4)])./maximum(abs.(grad_block[Block(4)])), digits = 3), " ",trunc(norm(grad_block[Block(4)]), digits = 2))
+        # Update  
+        state_tree_ω, model_ω  = Optimisers.update!(state_tree_ω, model_ω, (ω = grad_block[Block(4)],))
+        state_tree_ρ, model_ρ  = Optimisers.update!(state_tree_ρ, model_ρ, (ρ = grad_block[Block(6)],))
 
         # New solution 
-        status_new, loss_new = inverse_loss(observation, θ_guess, game, parametric_game)
+        z_new, status_new, loss_new = inverse_loss(observation, θ_guess, game, parametric_game; initial_guess = z_new)
 
         # Break if new step did not converge
         if status_new != PATHSolver.MCP_Solved
@@ -817,41 +797,31 @@ function inverse(observation, θ_guess, game_setup; max_grad_steps = 10, tol = 1
         end
 
         # Print
-        verbose && println(@sprintf("%3d: Δx0 = %2.0f ω = %7.5f ρ = %5.2f ||p|| = %6.3f L = %6.3f",
+        verbose && println(
             i,
-            norm(θ_guess[Block(1)] - θ_truth[Block(1)]),
-            θ_guess[Block(4)][1],
-            θ_guess[Block(6)][1],
-            # norm([grad_block[Block(4)], grad_block[Block(6)]][1]),
-            momentum_norm,
+            ": Δx0:",
+            trunc(norm(θ_guess[Block(1)] - θ_truth[Block(1)]), digits = 2),
+            ": ωs: ",
+            trunc.(θ_guess[Block(4)], digits = 3),
+            ", ρs: ",
+            trunc.(θ_guess[Block(6)], digits = 3),
+            ", ∇L: ",
+            trunc.(grad_norm, digits = 3),
+            ", L: ",
             loss_new,
-        ))
-        # verbose && println(
-        #     i,
-        #     ": Δx0:",
-        #     trunc(norm(θ_guess[Block(1)] - θ_truth[Block(1)]), digits = 2),
-        #     ": ωs: ",
-        #     trunc.(θ_guess[Block(4)], digits = 3),
-        #     ", ρs: ",
-        #     trunc.(θ_guess[Block(6)], digits = 3),
-        #     ", ∇L: ",
-        #     trunc.(norm([grad_block[Block(4)], grad_block[Block(6)]]), digits = 3),
-        #     ", L: ",
-        #     loss_new,
-        # )
-        push!(grad_norms, norm([grad_block[Block(4)], grad_block[Block(6)]]))
+        )
+        push!(grad_norms, grad_norm)
         push!(losses, loss_new)
 
-        # Break if momentum norm is small enough
-        if momentum_norm < tol
+        # Break if grad norm is small enough
+        if grad_norm < tol
             # Print momentum norm and break 
-            verbose && println("Stopping: Momentum norm = ", momentum_norm, " < ", tol) 
+            verbose && println("Stopping: Grad norm = ", grad_norm, " < ", tol) 
             break
         end
     end
 
     # Print final guess
-    # verbose && println("Final hyperplane parameters: ", θ_guess[Block(4)][1], " ", θ_guess[Block(6)][1]) 
     verbose && println("Final hyperplane parameters: ", θ_guess[Block(4)])
 
     # Plot losses and gradient norm 
