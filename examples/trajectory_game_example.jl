@@ -41,7 +41,7 @@ using PATHSolver: PATHSolver
 using LinearAlgebra: norm_sqr, norm
 using ProgressMeter: ProgressMeter
 using Plots
-using Zygote 
+using Zygote
 using Printf 
 using UnPack: @unpack
 using Random: MersenneTwister
@@ -88,10 +88,11 @@ function setup_trajectory_game(; n_players = 2, horizon = ∞, dt = 5.0, n = 0.0
                 p = x_other[1:2] + ρs[couple_idx] * n
 
                 # Print value of couple_idx and ii 
-                # println("couple_idx = ", couple_idx, ", ii = ", ii)
+                # println("couple_idx = ", couple_idx, " ω = ", ωs[couple_idx], " ρ = ", ρs[couple_idx], ", ii = ", ii)
 
                 # Hyperplane constraint at time ii for couple couple_idx
                 n' * (x_ego[1:2] - p)
+
             end for (couple_idx, couple) in enumerate(couples) for (ii, x) in enumerate(xs)
         ]
     end
@@ -406,7 +407,7 @@ function visualize_rotating_hyperplanes(
     position_indices = vcat(
         [[1 2] .+ (player - 1) * parameters.n_states_per_player for player in 1:(parameters.n_players)]...,
     )
-    couples = findall(parameters.adjacency_matrix)
+    couples = parameters.couples
     colors = palette(:default)[1:(parameters.n_players)]
     T = size(states,2)
 
@@ -559,7 +560,7 @@ function visualize_rotating_hyperplanes(
 end    
 
 "Solve the forward game"
-function forward(θ, game_setup; visualize = false)
+function forward(θ, game_setup; visualize = false, filename = "forward")
     @unpack game, parametric_game, dt, couples = game_setup
     
     # Simulate forward
@@ -586,18 +587,11 @@ function forward(θ, game_setup; visualize = false)
     # Plot hyperplanes
     if visualize
         trajectory = (; x = hcat(sim_steps.xs...), u = hcat(sim_steps.us...))
-        # adjacency_matrix = [false true; false false] # used in plotting only
-        n_players = num_players(game)
-        adjacency_matrix = zeros(Bool, (n_players, n_players))
-        for couple in couples
-            adjacency_matrix[couple[1], couple[2]] = true
-        end
         plot_parameters = 
             (;
                 n_players = num_players(game),
                 n_states_per_player = state_dim(game.dynamics.subsystems[1]),
                 goals = [θ[Block(2)][Block(player)] for player in 1:num_players(game)],
-                adjacency_matrix, 
                 couples,
                 ωs = θ[Block(4)],
                 α0s = zeros(length(couples)),
@@ -610,7 +604,7 @@ function forward(θ, game_setup; visualize = false)
             # title = string(n_players)*"p",
             koz = true,
             fps = 10.0,
-            filename = "forward",
+            filename,
             save_frame = 25,
         )
     end
@@ -631,14 +625,19 @@ function setup_experiment()
     horizon = 22
     dt = 10.0
     scale = 100.0
-    n_players = 3
+    n_players = 2
     initial_state = mortar([vcat(-scale .* unitvector(pi/n_players*(i-1)), [0.0,0.0]) for i in 1:n_players])
     goals = mortar([scale .* unitvector(pi/n_players*(i-1)) for i in 1:n_players])
-    couples = [(1, 2), (1, 3), (2, 3)]
-    # couples = [(1, 2)]
-    ωs = [0.015 for _ in couples]
-    α0s = [atan(initial_state[Block(couple[1])][2] - initial_state[Block(couple[2])][2],initial_state[Block(couple[1])][1] - initial_state[Block(couple[2])][1]) for couple in couples]
-    ρs = [30.0 for _ in couples]
+    couples = [(1, 2)]
+    # ωs = [0.015 for _ in couples]
+    ωs = [0.015]
+    α0s = [
+        atan(
+            initial_state[Block(couple[1])][2] - initial_state[Block(couple[2])][2],
+            initial_state[Block(couple[1])][1] - initial_state[Block(couple[2])][1],
+        ) for couple in couples
+    ]
+    ρs = [30.0]
     weights = mortar([[10.0, 0.0001] for _ in 1:n_players])
     m   = 100.0 # kg
     r₀ = (400 + 6378.137) # km
@@ -655,21 +654,20 @@ function setup_experiment()
     # ---- INVERSE GAME PARAMETERS ----
 
     # Step parameters
-    learning_rate_x0_pos = 5.0e-3
-    learning_rate_x0_vel = 1e-6
-    learning_rate_ω = 1e-9
-    learning_rate_ρ = 1.5e-2
-    momentum_factor = 0.6 
-    learning_parameters = (; learning_rate_x0_pos, learning_rate_x0_vel, learning_rate_ω, learning_rate_ρ, momentum_factor)
+    learning_rate_x0_pos = 10
+    learning_rate_x0_vel = 1e-2
+    learning_rate_ω = 5e-4
+    learning_rate_ρ = 1.0
+    learning_parameters = (; learning_rate_x0_pos, learning_rate_x0_vel, learning_rate_ω, learning_rate_ρ)
 
     # Initial parameter guess TODO remove this. Shouldn't be part of the setup struct 
     θ_guess = mortar([
         initial_state,
         goals,
         weights,
-        [0.008 for _ in 1:length(couples)], # From cited paper
+        [0.008 for _ in couples], # From cited paper
         α0s,
-        [10.0 for _ in 1:length(couples)]
+        [10.0 for _ in couples]
     ])
     
     # ---- MONTE CARLO PARAMETERS ----
@@ -681,7 +679,7 @@ end
 
 "Loss function. Norm square of difference between observed and predicted primals"
 function inverse_loss(observation, θ, game, parametric_game; initial_guess = nothing)
-    
+
     # Predicted equilibrium 
     solution_predicted = solve(
             parametric_game,
@@ -705,9 +703,10 @@ function inverse_loss(observation, θ, game, parametric_game; initial_guess = no
 end
 
 "Compose θ_guess from models"
-function compose_from_models(models, θ_guess)
+function compose_from_models(models, indices, θ_guess)
     block_dict = Dict(
         :x0 => Block(1),
+        :v0 => Block(1),
         :goals => Block(2),
         :weights => Block(3),
         :ω => Block(4),
@@ -718,13 +717,16 @@ function compose_from_models(models, θ_guess)
     # Extract parameters from model
     for model in models
         for (key, value) in pairs(model)
-            θ_guess[block_dict[key]] = value
+            if haskey(indices, key)
+                θ_guess[block_dict[key]][indices[key]] = value
+            else
+                θ_guess[block_dict[key]] = value
+            end
         end
     end
 
     θ_guess
 end
-
 
 """
 Solve the inverse game taking gradient steps
@@ -734,15 +736,37 @@ Observation is a vector of concatenated states for all players i.e. [x^1, ... , 
 function inverse(observation, θ_guess, game_setup; max_grad_steps = 10, tol = 1e-1, verbose = false)
 
     @unpack game, parametric_game, θ_truth, learning_parameters = game_setup
-    @unpack learning_rate_x0_pos, learning_rate_x0_vel, learning_rate_ω, learning_rate_ρ, momentum_factor = learning_parameters
+    @unpack learning_rate_x0_pos, learning_rate_x0_vel, learning_rate_ω, learning_rate_ρ = learning_parameters
+
+    # Setup indices
+    indices = Dict(
+        :x0 => reduce(
+            vcat,
+            [
+                (1:2) .+ (i - 1) * state_dim(game.dynamics.subsystems[1]) for
+                i in 1:num_players(game)
+            ],
+        ),
+        :v0 => reduce(
+            vcat,
+            [
+                (3:4) .+ (i - 1) * state_dim(game.dynamics.subsystems[1]) for
+                i in 1:num_players(game)
+            ],
+        ),
+    )
 
     # Setup optimiser
+    model_x0 = (x0 = copy(θ_guess[Block(1)])[indices[:x0]],)
+    model_v0 = (v0 = copy(θ_guess[Block(1)])[indices[:v0]],)
     model_ω = (ω = copy(θ_guess[Block(4)]),)
     model_ρ = (ρ = copy(θ_guess[Block(6)]),)
 
     # Setup chain 
-    state_tree_ω = Optimisers.setup(Optimisers.Adam(0.001, (0.8, 0.999)), model_ω)
-    state_tree_ρ = Optimisers.setup(Optimisers.Adam(3.0, (0.8, 0.999)), model_ρ)
+    state_tree_x0 = Optimisers.setup(Optimisers.Adam(learning_rate_x0_pos, (0.9, 0.999)), model_x0)
+    state_tree_v0 = Optimisers.setup(Optimisers.Adam(learning_rate_x0_vel, (0.8, 0.999)), model_v0)
+    state_tree_ω = Optimisers.setup(Optimisers.Adam(learning_rate_ω, (0.8, 0.999)), model_ω)
+    state_tree_ρ = Optimisers.setup(Optimisers.Adam(learning_rate_ρ, (0.8, 0.999)), model_ρ)
 
     # Print first step 
     z_new, status_first, loss_first = inverse_loss(observation, θ_guess, game, parametric_game)
@@ -751,7 +775,9 @@ function inverse(observation, θ_guess, game_setup; max_grad_steps = 10, tol = 1
     verbose && println(
         "0: ",
         "Δx0: ",
-        norm(θ_guess[Block(1)] - θ_truth[Block(1)]),
+        norm(θ_guess[Block(1)][indices[:x0]] - θ_truth[Block(1)][indices[:x0]]),
+        ", Δv0: ",
+        norm(θ_guess[Block(1)][indices[:v0]] - θ_truth[Block(1)][indices[:v0]]),
         ", ωs: ",
         trunc.(θ_guess[Block(4)], digits = 3),
         ", ρs: ",
@@ -768,18 +794,35 @@ function inverse(observation, θ_guess, game_setup; max_grad_steps = 10, tol = 1
 
     # Gradient wrt hyperplane parameters only 
     grad_norms  = []
+    grad_norms_x0 = Float64[]
+    grad_norms_v0 = Float64[]
+    grad_norms_ω = Float64[]
+    grad_norms_ρ = Float64[]
     losses = []
     θ_guess = copy(θ_guess)
     for i in 1:max_grad_steps
 
         # Gradient 
-        grad = Zygote.gradient(θ -> inverse_loss(observation, θ, game, parametric_game; initial_guess = z_new)[3], compose_from_models([model_ω, model_ρ], θ_guess))         
-        grad_block = BlockArray(grad[1], blocksizes(θ_guess)[1])
-        grad_norm = norm([grad_block[Block(4)], grad_block[Block(6)]])
+        grad = Zygote.gradient(
+            θ -> inverse_loss(observation, θ, game, parametric_game; initial_guess = z_new)[3],
+            θ_guess,
+        )[1]
+        grad_block = BlockArray(grad, blocksizes(θ_guess)[1])
 
-        # Update  
+        grad_norm_x0 = norm(grad_block[Block(1)][indices[:x0]])
+        grad_norm_v0 = norm(grad_block[Block(1)][indices[:v0]])
+        grad_norm_ω = norm(grad_block[Block(4)])
+        grad_norm_ρ = norm(grad_block[Block(6)])
+        grad_norm = norm([grad_block[Block(1)], grad_block[Block(4)], grad_block[Block(6)]])
+
+        # Update models
+        state_tree_x0, model_x0 = Optimisers.update!(state_tree_x0, model_x0, (x0 = grad_block[Block(1)][indices[:x0]],))
+        state_tree_v0, model_v0 = Optimisers.update!(state_tree_v0, model_v0, (v0 = grad_block[Block(1)][indices[:v0]],))
         state_tree_ω, model_ω  = Optimisers.update!(state_tree_ω, model_ω, (ω = grad_block[Block(4)],))
         state_tree_ρ, model_ρ  = Optimisers.update!(state_tree_ρ, model_ρ, (ρ = grad_block[Block(6)],))
+
+        # New parameters 
+        θ_guess = compose_from_models([model_x0, model_v0, model_ω, model_ρ], indices, copy(θ_guess))
 
         # New solution 
         z_new, status_new, loss_new = inverse_loss(observation, θ_guess, game, parametric_game; initial_guess = z_new)
@@ -799,8 +842,10 @@ function inverse(observation, θ_guess, game_setup; max_grad_steps = 10, tol = 1
         # Print
         verbose && println(
             i,
-            ": Δx0:",
-            trunc(norm(θ_guess[Block(1)] - θ_truth[Block(1)]), digits = 2),
+            ": Δx0: ",
+            trunc(norm(θ_guess[Block(1)][indices[:x0]] - θ_truth[Block(1)][indices[:x0]]), digits = 2),
+            ", Δv0: ",
+            trunc(norm(θ_guess[Block(1)][indices[:v0]] - θ_truth[Block(1)][indices[:v0]]), digits = 2),
             ": ωs: ",
             trunc.(θ_guess[Block(4)], digits = 3),
             ", ρs: ",
@@ -810,6 +855,10 @@ function inverse(observation, θ_guess, game_setup; max_grad_steps = 10, tol = 1
             ", L: ",
             loss_new,
         )
+        push!(grad_norms_x0, grad_norm_x0)
+        push!(grad_norms_v0, grad_norm_v0)
+        push!(grad_norms_ω, grad_norm_ω)
+        push!(grad_norms_ρ, grad_norm_ρ)
         push!(grad_norms, grad_norm)
         push!(losses, loss_new)
 
@@ -824,11 +873,23 @@ function inverse(observation, θ_guess, game_setup; max_grad_steps = 10, tol = 1
     # Print final guess
     verbose && println("Final hyperplane parameters: ", θ_guess[Block(4)])
 
-    # Plot losses and gradient norm 
-    fig1 = Plots.plot(1:length(losses), losses, label = "loss", yaxis=:log)
-    fig2 = Plots.plot(1:length(grad_norms), grad_norms, label = "gradient norm", yaxis=:log)
-    Plots.display(fig1)
-    Plots.display(fig2)
+    # # Plot losses and gradient norm 
+    # fig_loss = Plots.plot(1:length(losses), losses, label = "loss", yaxis=:log)
+    # Plots.display(fig_loss)
+
+    # Plot grad_norms_x0, grad_norms_v0, grad_norms_ω, grad_norms_ρ in a single plot with subplots
+    # fig_x0 = Plots.plot(1:length(grad_norms_x0), grad_norms_x0, ylims = (0,Inf), label = "|∇L_x0|", yaxis=:log)
+    # fig_v0 = Plots.plot(1:length(grad_norms_v0), grad_norms_v0, ylims = (0,Inf), label = "|∇L_v0|", yaxis=:log)
+    # fig_ω = Plots.plot(1:length(grad_norms_ω), grad_norms_ω, ylims = (0,Inf), label = "|∇L_ω|", yaxis=:log)
+    # fig_ρ = Plots.plot(1:length(grad_norms_ρ), grad_norms_ρ, ylims = (0,Inf), label = "|∇L_ρ|", yaxis=:log)
+    # fig = Plots.plot(fig_x0, fig_v0, fig_ω, fig_ρ, layout = (2,2), legend = true)
+    # Plots.display(fig)
+
+    # # Plot hyperplanes with final trajectory
+    # θ_inverse = copy(game_setup.θ_truth)
+    # θ_inverse[Block(4)] .= θ_guess[Block(4)]
+    # θ_inverse[Block(6)] .= θ_guess[Block(6)]
+    # forward(θ_inverse, game_setup; visualize = true, filename = "inverse")
 
     # Return parameters
     return true, θ_guess
@@ -1076,7 +1137,7 @@ function plotmc(results, noise_levels, game_setup)
         noise_levels,
         [sum(results[results[:, 1] .== noise_level, 2]) / (noise_level == noise_levels[1] ? 2.0 : trials) * 100 for noise_level in noise_levels],
     )
-    rowsize!(fig_convergence.layout, 1, Aspect(1,0.2))
+    Makie.rowsize!(fig_convergence.layout, 1, Makie.Aspect(1,0.2))
 
     # Plot bands for ω
     ω_median = [median(results[(results[:, 1] .== noise_level) .* idx_converged, 3]) for noise_level in noise_levels]
@@ -1095,7 +1156,7 @@ function plotmc(results, noise_levels, game_setup)
     Makie.scatter!(ax_ω, noise_levels, ω_median, color = color_iqr)
     Makie.band!(ax_ω, noise_levels, ω_median .- ω_iqr/2, ω_median .+ ω_iqr/2, color = (color_iqr, 0.2))
     Makie.hlines!(ax_ω, game_setup.θ_truth[Block(4)][1], color = color_iqr, linewidth = 2, linestyle = :dot)
-    ax_ρ = Axis(
+    ax_ρ = Makie.Axis(
         fig_bands[1, 2],
         xlabel = "Noise standard deviation",
         ylabel = "ρ [m]",
@@ -1105,7 +1166,7 @@ function plotmc(results, noise_levels, game_setup)
     # Makie.band!(ax_ρ, noise_levels, clamp.(ρ_median .- ρ_iqr/2, game_setup.ρmin, Inf), ρ_median .+ ρ_iqr/2, color = (color_iqr, 0.2))
     Makie.band!(ax_ρ, noise_levels, ρ_median .- ρ_iqr/2, ρ_median .+ ρ_iqr/2, color = (color_iqr, 0.2))
     Makie.hlines!(ax_ρ, game_setup.θ_truth[Block(6)][1], color = color_iqr, linewidth = 2, linestyle = :dot)
-    rowsize!(fig_bands.layout, 1, Aspect(1,0.9))
+    Makie.rowsize!(fig_bands.layout, 1, Makie.Aspect(1,0.9))
     
 
     # Plot reconstruction error
@@ -1121,12 +1182,12 @@ function plotmc(results, noise_levels, game_setup)
     )
     Makie.scatter!(ax_error, noise_levels, reconstruction_error_median, color = color_iqr)
     Makie.band!(ax_error, noise_levels, clamp.(reconstruction_error_median .- reconstruction_error_iqr/2, 0, Inf), reconstruction_error_median .+ reconstruction_error_iqr/2, color = (color_iqr, 0.2))
-    rowsize!(fig_error.layout, 1, Aspect(1,0.2))
+    Makie.rowsize!(fig_error.layout, 1, Makie.Aspect(1,0.2))
 
     # # Save figures 
-    save("figures/mc_noise_convergence.jpg", fig_convergence)
-    save("figures/mc_noise_bands.jpg", fig_bands)
-    save("figures/mc_noise_error.jpg", fig_error)
+    Makie.save("figures/mc_noise_convergence.jpg", fig_convergence)
+    Makie.save("figures/mc_noise_bands.jpg", fig_bands)
+    Makie.save("figures/mc_noise_error.jpg", fig_error)
 
     return nothing
 end
