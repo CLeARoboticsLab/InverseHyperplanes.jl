@@ -11,7 +11,7 @@ constraints g̃ and h̃ incorporate dynamic feasibility, fixed initial condition
 state limits, environment boundaries, and collision-avoidance.
 """
 
-using Assignment5
+using InverseHyperplanes
 using LazySets: LazySets
 using TrajectoryGamesBase:
     TrajectoryGamesBase,

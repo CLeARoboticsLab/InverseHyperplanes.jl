@@ -1,4 +1,4 @@
-module Assignment5
+module InverseHyperplanes
 
 using Symbolics: Symbolics, @variables
 using ParametricMCPs: ParametricMCPs, ParametricMCP
