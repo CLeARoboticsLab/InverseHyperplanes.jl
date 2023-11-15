@@ -125,7 +125,7 @@ end
 
 """
 Utility for converting vertically concatenated state trajectories (i.e. [x^1, x^2]) into a matrix of the form
-    [[x^1_1, x^2_1], ... , [x^1_T, x^2_T]]
+    [[x^1_1, x^2_1]', ... , [x^1_T, x^2_T]']
 """
 function states_to_matrix(states, dynamics::ProductDynamics)
     single_traj_length = state_dim(dynamics.subsystems[1]) * horizon(dynamics) # assumes same dynamics for all players
@@ -465,12 +465,14 @@ function visualize_rotating_hyperplanes(
                 [states[position_indices[player, 2], 2:i] for player in 1:(parameters.n_players)],
                 markersize = marker_observations,
                 msw = 0,
+                label = "",
             )
         else
             Plots.plot!(
                 [states[position_indices[player, 1], 2:i] for player in 1:(parameters.n_players)],
                 [states[position_indices[player, 2], 2:i] for player in 1:(parameters.n_players)],
                 linewidth = line_width,
+                label = "",
             )
         end
 
@@ -482,6 +484,7 @@ function visualize_rotating_hyperplanes(
             marker = :star4,
             markercolor=:white,
             markerstrokecolor=colors,
+            label = "Start position",
         )
 
         # plot goals from parameters info with an x
@@ -492,6 +495,7 @@ function visualize_rotating_hyperplanes(
             marker = :star4,
             color = colors,
             msw = 0,
+            label = "Goal position",
         )
 
         # Plot KoZs and hyperplanes
@@ -507,6 +511,7 @@ function visualize_rotating_hyperplanes(
                     fill = true,
                     # linewidth = line_width_hyperplanes,
                     linewidth = 0.0,
+                    label = "Keep-out zone",
                 )
             end
             # Plot hyperplane normal
@@ -528,6 +533,7 @@ function visualize_rotating_hyperplanes(
                     color = colors[couple[1]],
                     linewidth = line_width_hyperplanes,
                     linestyle = :dot,
+                    label = "Hyperplane",
                 )
             end
         end
@@ -539,6 +545,7 @@ function visualize_rotating_hyperplanes(
             markersize = marker_size_players,
             msw = 3,
             color = colors,
+            label = "Robot position",
         )
 
         # Set domain
@@ -553,6 +560,7 @@ function visualize_rotating_hyperplanes(
 
         # Save if at saveframe
         if !isnothing(save_frame) && i == save_frame
+            # Plots.plot!(legend = :outerright, legendfontsize=text_size)
             Plots.savefig("figures/"*filename*"_frame.png")
         end
     end
@@ -564,29 +572,26 @@ function forward(θ, game_setup; visualize = false, filename = "forward")
     @unpack game, parametric_game, dt, couples = game_setup
     
     # Simulate forward
-    turn_length = horizon(game.dynamics) 
-    receding_horizon_strategy =
-            WarmStartRecedingHorizonStrategy(; game, parametric_game, turn_length, horizon=turn_length, parameters = θ)
-    sim_steps = let
-        n_sim_steps = turn_length
-        progress = ProgressMeter.Progress(n_sim_steps)
-        
-        rollout(
-            game.dynamics,
-            receding_horizon_strategy,
-            θ[Block(1)],
-            n_sim_steps;
-            get_info = (γ, x, t) ->
-                (ProgressMeter.next!(progress); γ.receding_horizon_strategy),
+    solution = solve(
+            parametric_game,
+            θ; 
+        verbose = false,
+        return_primals = true
         )
-    end
 
-    # MCP solution
-    solution = receding_horizon_strategy.last_solution
+    # Extract states, reshape as a matrix and save in a tuple
+    trajectory = (;
+        x = states_to_matrix(
+            extract_states(
+                solution.variables[1:sum(parametric_game.primal_dimensions)],
+                game.dynamics,
+            ),
+            game.dynamics,
+        )
+    )
 
     # Plot hyperplanes
     if visualize
-        trajectory = (; x = hcat(sim_steps.xs...), u = hcat(sim_steps.us...))
         plot_parameters = 
             (;
                 n_players = num_players(game),
@@ -602,10 +607,11 @@ function forward(θ, game_setup; visualize = false, filename = "forward")
             trajectory.x,
             plot_parameters;
             # title = string(n_players)*"p",
-            koz = true,
+            koz = true, 
+            hyperplanes = true,
             fps = 10.0,
             filename,
-            save_frame = 25,
+            save_frame = 17,
         )
     end
 
@@ -613,7 +619,7 @@ function forward(θ, game_setup; visualize = false, filename = "forward")
 end
 
 "Setup parameteres for the forward game, inverse game, and the MC analysis parameters"
-function setup_experiment()
+function setup_experiment(;n_players = 2)
 
     function unitvector(θ)
         [cos(θ), sin(θ)]
@@ -625,19 +631,19 @@ function setup_experiment()
     horizon = 22
     dt = 10.0
     scale = 100.0
-    n_players = 2
     initial_state = mortar([vcat(-scale .* unitvector(pi/n_players*(i-1)), [0.0,0.0]) for i in 1:n_players])
     goals = mortar([scale .* unitvector(pi/n_players*(i-1)) for i in 1:n_players])
-    couples = [(1, 2)]
-    # ωs = [0.015 for _ in couples]
-    ωs = [0.015]
+    couples = [(i, j) for i in 1:n_players for j in i+1:n_players]
+    ωs = [0.015 for _ in couples]
+    # ωs = [0.015]
     α0s = [
         atan(
             initial_state[Block(couple[1])][2] - initial_state[Block(couple[2])][2],
             initial_state[Block(couple[1])][1] - initial_state[Block(couple[2])][1],
         ) for couple in couples
     ]
-    ρs = [30.0]
+    # ρs = [30.0]
+    ρs = [20.0 for _ in couples]
     weights = mortar([[10.0, 0.0001] for _ in 1:n_players])
     m   = 100.0 # kg
     r₀ = (400 + 6378.137) # km
@@ -896,7 +902,11 @@ function inverse(observation, θ_guess, game_setup; max_grad_steps = 10, tol = 1
 
 end
 
-"Utility to extract states from the primals of an MCP solution"
+"""
+Utility to extract states from the primals of an MCP solution.
+
+Primals should be in the form of a single vector. 
+"""
 function extract_states(primals, dynamics::ProductDynamics)
     n_players = num_players(dynamics)
     n_states_per_player = state_dim(dynamics.subsystems[1])
@@ -1078,6 +1088,97 @@ function mc(trials, game_setup, solution_forward; kwargs...)
     end
     
     return results, noise_levels
+end
+
+"Given a set of parameters, run Monte Carlo simulation for different initial velocities"
+function mc_inits(trials; n_players_vec = 2:1:5, velocity_σs = 0:0.1:1.0, convergence_threshold = 0.9)
+
+all_convergence_rates = Vector{Vector{Float64}}()
+all_velocity_σs = []
+for n_players in n_players_vec
+
+    setup_time = @elapsed game_setup = setup_experiment(;n_players)
+    @unpack game, parametric_game, rng = game_setup
+    println("---- ", n_players, "-player game. Setup time = ", setup_time, " ----")
+
+    # All velocity indices in a single vector
+    velocity_indices = reduce(
+        vcat,
+        [
+            (3:4) .+ (player - 1) * state_dim(game.dynamics.subsystems[1]) for
+            player in 1:n_players
+        ],
+    )
+
+    convergence_rates = Float64[]
+    convergence_rate_flag = false
+    for velocity_σ in velocity_σs
+        converged = Bool[]
+        for trial in 1:trials
+            # Sample initial state with perturbed velocity 
+            velocity_disturbance = velocity_σ * randn(rng, 2 * n_players)
+            θ_sample = copy(game_setup.θ_truth)
+            θ_sample[Block(1)][velocity_indices] += velocity_disturbance
+
+            # Run forward game with given parameters
+            solution = forward(θ_sample, game_setup; visualize = false)    
+
+            # Print and save 
+            println("   v_σ = ", velocity_σ, " trial ", trial, " converged ", solution.status == PATHSolver.MCP_Solved ? "true" : "false")
+            solution.status == PATHSolver.MCP_Solved ? push!(converged, true) : push!(converged, false)
+        end 
+
+        # Print convergence rate and save 
+        println("   v_σ = ", velocity_σ, " convergence rate ", sum(converged) / trials)
+        push!(convergence_rates, sum(converged) / trials)
+
+        if sum(converged) / trials < convergence_threshold
+            println("   Convergence rate too low. Stopping.")
+            convergence_rate_flag = true
+            break
+        end
+    end
+
+    push!(all_convergence_rates, convergence_rates)
+    if convergence_rate_flag
+        push!(all_velocity_σs, velocity_σs[1:length(convergence_rates)])
+    else
+        push!(all_velocity_σs, velocity_σs)
+    end
+
+    println(n_players, "-player game. Convergence rates: ", convergence_rates, " velocity_σs: ", all_velocity_σs[end],"\n")
+end
+
+Main.@infiltrate
+
+# Parameters 
+text_size = 23
+line_width = 4
+colors = palette(:default)[1:(length(all_velocity_σs))]
+Makie.set_theme!()
+
+fig_convergence = Makie.Figure(resolution = (800, 300), fontsize = text_size)
+ax_convergence = Makie.Axis(
+    fig_convergence[1, 1],
+    xlabel = "Velocity noise standard deviation [m/s]",
+    ylabel = "Convergence %",
+    limits = ((0, all_velocity_σs[1][end]), (0, 110)),
+)
+for (σs, rates, player_i) in zip(all_velocity_σs, all_convergence_rates, 1:length(all_velocity_σs))
+        Makie.lines!(
+            ax_convergence,
+            σs,
+            100 .* rates,
+            color = colors[player_i],
+            label = string(player_i+1) * (" robots"),
+            linewidth = line_width,
+        )
+end
+Makie.axislegend(position = :lb)
+Makie.save("figures/mc_init_convergence.jpg", fig_convergence)
+
+nothing
+
 end
 
 "Plot convergence rate, average reconstruction error, and parameter error vs noise level"
