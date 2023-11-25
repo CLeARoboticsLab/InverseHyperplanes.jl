@@ -12,9 +12,9 @@ An example using the Hill-Clohessy-Wiltshire equations for relative orbital moti
     <td style="height: 10px;">3. Collision-free trajectory</td>
   </tr>
   <tr>
-    <td valign="top"><img src="media/pull_expert.gif"  height="250"></td>
-    <td valign="top"><img src="media/pull_inverse.gif" height="250"></td>
-    <td valign="top"><img src="media/pull_3D.gif"      height="250"></td>
+    <td valign="top"><img src="figure/pull_expert.gif"  height="250"></td>
+    <td valign="top"><img src="figure/pull_inverse.gif" height="250"></td>
+    <td valign="top"><img src="figure/pull_3D.gif"      height="250"></td>
   </tr>
  </table>
 
