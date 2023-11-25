@@ -1,7 +1,5 @@
 # InverseHyperplanes.jl
 
-# SlackHyperplanes.jl
-
 Collision-free trajectories for non-cooperative multi-agent systems using rotating hyperplanes constraints learned from expert data. 
 
 An example using the Hill-Clohessy-Wiltshire equations for relative orbital motion:
