@@ -1,6 +1,6 @@
 # InverseHyperplanes.jl
 
-Collision-free trajectories for non-cooperative multi-agent systems using rotating hyperplanes constraints learned from expert data. 
+Collision-free trajectories for non-cooperative multi-agent systems using rotating hyperplanes constraints learned from expert trajectories. 
 
 An example using the Hill-Clohessy-Wiltshire equations for relative orbital motion:
 <table>
@@ -10,13 +10,13 @@ An example using the Hill-Clohessy-Wiltshire equations for relative orbital moti
     <td style="height: 10px;">3. Collision-free trajectory</td>
   </tr>
   <tr>
-    <td valign="top"><img src="figure/pull_expert.gif"  height="250"></td>
-    <td valign="top"><img src="figure/pull_inverse.gif" height="250"></td>
-    <td valign="top"><img src="figure/pull_3D.gif"      height="250"></td>
+    <td valign="top"><img src="figures/pull_expert.gif"  height="250"></td>
+    <td valign="top"><img src="figures/pull_inverse.gif" height="250"></td>
+    <td valign="top"><img src="figures/pull_3D.gif"      height="250"></td>
   </tr>
  </table>
 
-> Note: For any questions on how to use it please reach out to me at [fernandopalafox@utexas.edu](mailto:fernandopalafox@utexa.edu) or open an issue.
+> Note: For any questions on how to use this repo, do not hesitate to reach out to me at [fernandopalafox@utexas.edu](mailto:fernandopalafox@utexa.edu) or open an issue.
 
 ## Paper Abstract 
 
