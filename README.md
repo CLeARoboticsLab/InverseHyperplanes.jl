@@ -5,8 +5,8 @@ Collision-free trajectories for non-cooperative multi-agent systems using rotati
 An example using the Hill-Clohessy-Wiltshire equations for relative orbital motion:
 <table>
   <tr>
-    <td style="height: 10px;">1. Noisy expert data</td>
-    <td style="height: 10px;">2. Inferred hyperplanes</td>
+    <td style="height: 10px;">1. Expert trajectories</td>
+    <td style="height: 10px;">2. Learned hyperplanes</td>
     <td style="height: 10px;">3. Collision-free trajectory</td>
   </tr>
   <tr>
