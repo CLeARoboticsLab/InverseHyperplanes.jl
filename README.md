@@ -1,5 +1,6 @@
 # InverseHyperplanes.jl
 
+![CI]([https://github.com/github/docs/actions/workflows/main.yml/badge.svg](https://github.com/CLeARoboticsLab/InverseHyperplanes.jl/actions/workflows/CI.yml/badge.svg))
 [![License](https://img.shields.io/badge/license-MIT-blue)](https://opensource.org/licenses/MIT)
 
 Collision-free trajectories for non-cooperative multi-agent systems using rotating hyperplanes constraints learned from expert trajectories by solving an inverse game.  Read the full paper [here](https://arxiv.org/abs/2311.09439). 
