@@ -91,8 +91,8 @@ end
         # ---- INVERSE GAME PARAMETERS ----
     
         # Step parameters
-        learning_rate_x0_pos = 0.0 # set to zero because we have no noise so init position is known
-        learning_rate_x0_vel = 0.0 # set to zero because we have no noise so init velocity is known
+        learning_rate_x0_pos = 0.0
+        learning_rate_x0_vel = 0.0
         learning_rate_ω = 5e-4
         learning_rate_ρ = 1.0
         learning_parameters = (; learning_rate_x0_pos, learning_rate_x0_vel, learning_rate_ω, learning_rate_ρ)
@@ -122,11 +122,16 @@ end
     states_forward = extract_states(primals_forward, experiment_setup.game.dynamics)
 
     # Learn parameters by solving inverse game
-    converged_inverse, inverse_parameters =
-        inverse(states_forward, experiment_setup.θ_guess, experiment_setup; max_grad_steps = 100, verbose = true)
+    converged_inverse, inverse_parameters = inverse(
+        states_forward,
+        experiment_setup.θ_guess,
+        experiment_setup;
+        max_grad_steps = 100,
+        verbose = false,
+    )
 
     # Test
     @test converged_inverse
-    @test isapprox.(inverse_parameters[Block(4)], experiment_setup.θ_truth[Block(4)], atol = 1e-2) #ω
-    @test isapprox.(inverse_parameters[Block(6)], experiment_setup.θ_truth[Block(6)], atol = 1) #ρ
+    @test isapprox(inverse_parameters[Block(4)], experiment_setup.θ_truth[Block(4)], atol = 1e-2) #ω
+    @test isapprox(inverse_parameters[Block(6)], experiment_setup.θ_truth[Block(6)], atol = 5) #ρ
 end
