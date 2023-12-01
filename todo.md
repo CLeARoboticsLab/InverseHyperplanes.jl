@@ -17,6 +17,8 @@
 - [ ] Remove Plots.jl dependency
 - [x] Make sure forward hyperplanes work for more than 2 players
 - [ ] Setup game struct as an actual structure? Should still work with current use of @unpack
-- [ ] Make all hyperplanes rotation rates the same. 
-- [ ] Setup 3-D demo. 
+- [x] Setup 3-D demo. 
+- [x] Add x0 gradient descent
 - [x] Warm-start using estimate of previous timestep, as in Xinjie's paper. 
+- [x] Re-run MC
+- [x] Run MC_inits
