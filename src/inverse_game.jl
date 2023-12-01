@@ -25,7 +25,7 @@ function inverse_loss(observation, θ, game, parametric_game; initial_guess = no
 end
 
 "Compose θ_guess from models"
-function compose_from_models(models, indices, θ_guess)
+function compose_from_models(models, indices, θ)
     block_dict = Dict(
         :x0 => Block(1),
         :v0 => Block(1),
@@ -40,14 +40,14 @@ function compose_from_models(models, indices, θ_guess)
     for model in models
         for (key, value) in pairs(model)
             if haskey(indices, key)
-                θ_guess[block_dict[key]][indices[key]] = value
+                θ[block_dict[key]][indices[key]] = value
             else
-                θ_guess[block_dict[key]] = value
+                θ[block_dict[key]] = value
             end
         end
     end
 
-    θ_guess
+    θ
 end
 
 """
@@ -55,7 +55,7 @@ Solve the inverse game taking gradient steps
 
 Observation is a vector of concatenated states for all players i.e. [x^1, ... , x^n_players], wherex^i = [x^i_1, ..., x^i_T], and T is the horizon
 """
-function inverse(observation, θ_guess, game_setup; max_grad_steps = 10, tol = 1e-1, verbose = false)
+function inverse(observation, θ_guess_0, game_setup; max_grad_steps = 10, tol = 1e-1, verbose = false)
 
     @unpack game, parametric_game, θ_truth, learning_parameters = game_setup
     @unpack learning_rate_x0_pos, learning_rate_x0_vel, learning_rate_ω, learning_rate_ρ = learning_parameters
@@ -79,10 +79,10 @@ function inverse(observation, θ_guess, game_setup; max_grad_steps = 10, tol = 1
     )
 
     # Setup optimiser
-    model_x0 = (x0 = copy(θ_guess[Block(1)])[indices[:x0]],)
-    model_v0 = (v0 = copy(θ_guess[Block(1)])[indices[:v0]],)
-    model_ω = (ω = copy(θ_guess[Block(4)]),)
-    model_ρ = (ρ = copy(θ_guess[Block(6)]),)
+    model_x0 = (x0 = copy(θ_guess_0[Block(1)])[indices[:x0]],)
+    model_v0 = (v0 = copy(θ_guess_0[Block(1)])[indices[:v0]],)
+    model_ω = (ω = copy(θ_guess_0[Block(4)]),)
+    model_ρ = (ρ = copy(θ_guess_0[Block(6)]),)
 
     # Setup chain 
     state_tree_x0 = Optimisers.setup(Optimisers.Adam(learning_rate_x0_pos, (0.9, 0.999)), model_x0)
@@ -91,19 +91,19 @@ function inverse(observation, θ_guess, game_setup; max_grad_steps = 10, tol = 1
     state_tree_ρ = Optimisers.setup(Optimisers.Adam(learning_rate_ρ, (0.8, 0.999)), model_ρ)
 
     # Print first step 
-    z_new, status_first, loss_first = inverse_loss(observation, θ_guess, game, parametric_game)
+    z_new, status_first, loss_first = inverse_loss(observation, θ_guess_0, game, parametric_game)
 
     # Print hyperplane parameters horizontally
     verbose && println(
         "0: ",
         "Δx0: ",
-        norm(θ_guess[Block(1)][indices[:x0]] - θ_truth[Block(1)][indices[:x0]]),
+        norm(θ_guess_0[Block(1)][indices[:x0]] - θ_truth[Block(1)][indices[:x0]]),
         ", Δv0: ",
-        norm(θ_guess[Block(1)][indices[:v0]] - θ_truth[Block(1)][indices[:v0]]),
+        norm(θ_guess_0[Block(1)][indices[:v0]] - θ_truth[Block(1)][indices[:v0]]),
         ", ωs: ",
-        trunc.(θ_guess[Block(4)], digits = 3),
+        trunc.(θ_guess_0[Block(4)], digits = 3),
         ", ρs: ",
-        trunc.(θ_guess[Block(6)], digits = 3),
+        trunc.(θ_guess_0[Block(6)], digits = 3),
         " L:  ",
         loss_first,
     )
@@ -111,7 +111,7 @@ function inverse(observation, θ_guess, game_setup; max_grad_steps = 10, tol = 1
     # Break if first step did not converge
     if status_first != PATHSolver.MCP_Solved
         verbose && println( "   Stopping: First step did not converge.") 
-        return false, θ_guess
+        return false, θ_guess_0
     end
 
     # Gradient wrt hyperplane parameters only 
@@ -121,13 +121,13 @@ function inverse(observation, θ_guess, game_setup; max_grad_steps = 10, tol = 1
     grad_norms_ω = Float64[]
     grad_norms_ρ = Float64[]
     losses = []
-    θ_guess = copy(θ_guess)
+    θ_guess = deepcopy(θ_guess_0)
     for i in 1:max_grad_steps
 
         # Gradient 
         grad = Zygote.gradient(
             θ -> inverse_loss(observation, θ, game, parametric_game; initial_guess = z_new)[3],
-            θ_guess,
+            collect(θ_guess),
         )[1]
         grad_block = BlockArray(grad, blocksizes(θ_guess)[1])
 
